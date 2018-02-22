@@ -92,6 +92,12 @@ class FileState {
     return Status::OK();
   }
 
+  // 这里是将数据写到blocks_集合中里去, blocks_集合是有序的
+  // 集合的元素是大小为kBlockSize(8Kb)的char类型数组, 其中
+  // size_存储的是当前blocks_中所有数据的大小，所以当
+  // size_ % kBlockSize == 0的时候就表示当前有序集合中的最后
+  // 一个block中的空间已经使用完毕， 我们需要new 一个新的block
+  // 出来
   Status Append(const Slice& data) {
     const char* src = data.data();
     size_t src_len = data.size();

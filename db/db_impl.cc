@@ -181,6 +181,9 @@ Status DBImpl::NewDB() {
   new_db.SetNextFile(2);
   new_db.SetLastSequence(0);
 
+  // 创建一个新的DB首先需要有一个Manifest文件记录当前DB的一些
+  // 配置信息， 比如说当前DB所使用的Comparator的名称以及LogNumber
+  // 等等
   const std::string manifest = DescriptorFileName(dbname_, 1);
   WritableFile* file;
   Status s = env_->NewWritableFile(manifest, &file);
@@ -284,6 +287,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
     return s;
   }
 
+  // 这里是获取db目录下'CURRENT'文件的路径, 如果是之前没有
+  // 该数据库，前面的逻辑只是创建了一个db的文件夹，这下面并没
+  // 有CURRENT这个文件，所以会走进这个逻辑
   if (!env_->FileExists(CurrentFileName(dbname_))) {
     if (options_.create_if_missing) {
       s = NewDB();
