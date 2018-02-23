@@ -186,11 +186,13 @@ Status DBImpl::NewDB() {
   // 等等
   const std::string manifest = DescriptorFileName(dbname_, 1);
   WritableFile* file;
+  // 这个env_实际上是env_posix
   Status s = env_->NewWritableFile(manifest, &file);
   if (!s.ok()) {
     return s;
   }
   {
+    // 将当前打开DB的一些配置信息写入到Manifest文件当中
     log::Writer log(file);
     std::string record;
     new_db.EncodeTo(&record);
@@ -200,6 +202,8 @@ Status DBImpl::NewDB() {
     }
   }
   delete file;
+  // 创建CURRENT文件，然后在CURRENT中写入数据，使CURRENT文件
+  // 指向我们新创建的Manifest文件
   if (s.ok()) {
     // Make "CURRENT" file that points to the new manifest file.
     s = SetCurrentFile(env_, dbname_, 1);
@@ -301,6 +305,8 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
           dbname_, "does not exist (create_if_missing is false)");
     }
   } else {
+    // 如果CURRENT文件已经存在，表明数据库已经存在，而我们
+    // 又设置了error_if_exists这时候我们报错，直接返回
     if (options_.error_if_exists) {
       return Status::InvalidArgument(
           dbname_, "exists (error_if_exists is true)");

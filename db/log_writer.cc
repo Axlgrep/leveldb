@@ -144,6 +144,8 @@ Status Writer::AddRecord(const Slice& slice) {
       if (leftover > 0) {
         // Fill the trailer (literal below relies on kHeaderSize being 7)
         assert(kHeaderSize == 7);
+        // 若当前Block中剩余可用空间已经不足以存储一条记录的Header，则剩余的
+        // 空间利用'\x00'进行填充
         dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
       }
       block_offset_ = 0;

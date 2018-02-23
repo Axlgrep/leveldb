@@ -912,6 +912,7 @@ Status VersionSet::Recover(bool *save_manifest) {
 
   // Read "CURRENT" file, which contains a pointer to the current manifest file
   std::string current;
+  // 读取db下的CURRENT文件，实际上里面的内容就是指向某一个Manifest文件，例如: MANIFEST-000004
   Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
   if (!s.ok()) {
     return s;
@@ -952,6 +953,8 @@ Status VersionSet::Recover(bool *save_manifest) {
       VersionEdit edit;
       s = edit.DecodeFrom(record);
       if (s.ok()) {
+        // 如果Manifest里面存储的之前使用的Comparator的名称与当前
+        // 使用的Comparator名称不一致，则直接报错
         if (edit.has_comparator_ &&
             edit.comparator_ != icmp_.user_comparator()->Name()) {
           s = Status::InvalidArgument(

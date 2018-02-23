@@ -77,6 +77,19 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
     // that it has returned, properly accounting for its header size.
+    // end_of_buffer_offset_ 是指的我们的文件read到的位置距离文件起始位置的偏移量
+    // physical_record_offset 是指的我们的文件当前正在解析的那条记录的起始位置距离
+    // 文件起始位置的偏移量, 随后这个值会赋值给last_record_offset_, 可以理解为我们
+    // 当前读取最后一条记录的起始位置
+    // e.g..
+    // | <Block1> | <Block2> | <Record1> |
+    // |-----------------------^|  <- physical_record_offset
+    // 如果当前正在解析Block3中的Record1, 那么physical_record_offset如上图所示
+    //
+    // | <Block1> | <Block2> | <Record1> <Record2> |
+    // |---------------------------------^|  <- physical_record_offset
+    // 如果当前正在解析Block3中的Record2, 那么physical_record_offset如上图所示
+    //
     uint64_t physical_record_offset =
         end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
 
@@ -197,6 +210,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       if (!eof_) {
         // Last read was a full read, so this is a trailer to skip
         buffer_.clear();
+        // 这里file的类型是PosixSequentialFile
         Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
         end_of_buffer_offset_ += buffer_.size();
         if (!status.ok()) {
@@ -204,6 +218,17 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
           ReportDrop(kBlockSize, status);
           eof_ = true;
           return kEof;
+        // 这里的buffer_.size() < kBlockSize()的情况可以理解为
+        // 当前读取的这个Block是文件中的最后一个Block(如果文件中
+        // 只有一个Block，那么这第一个Block也是最后一个Block),
+        // 并且这个Block的32kb还没有被写满，这时候就会出现读取
+        // buffer_的大小不足kBlockSize()
+        //
+        // Q: 为什么一定是文件中的最后一个Block？
+        // A: 如果是文件中间的Block那么基本上是被记录填充满的,
+        // 如果该Block填充了记录之后还有剩余空间不足再填充另一条
+        // 记录(该Block剩余空间都不足以存储一条记录的Header),
+        // 那么这时候剩余空间会用字符'\x00'进行填充
         } else if (buffer_.size() < kBlockSize) {
           eof_ = true;
         }

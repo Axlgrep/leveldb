@@ -107,6 +107,13 @@ class PosixSequentialFile: public SequentialFile {
 
   virtual Status Read(size_t n, Slice* result, char* scratch) {
     Status s;
+    // 这里有个疑惑，就是当我需要从文件中读取n字节数据的时候，文件中
+    // 的数据为m，m大于n的情况下，那么read的时候有没有可能读取出来
+    // 的数据大小是小于n的，如果是网络的情况由于有阻塞，所以实际上读取
+    // 的数据大小很可能是小于期望值的，但是从本地文件读取的话，从
+    // leveldb的一下逻辑来看，应该是'我会尽量满足你所需要读取的数据长
+    // 度，除非你的文件大小是m是小于n的，否则我一次read肯定能read到
+    // n Bytes的数据'
     while (true) {
       ssize_t r = read(fd_, scratch, n);
       if (r < 0) {
@@ -215,6 +222,13 @@ class PosixMmapReadableFile: public RandomAccessFile {
   }
 };
 
+/*
+ * PosixWritableFile实现的功能很简单, 实际上是将需要写入文件的数据
+ * 先写入到一个大小为64Kb的缓冲区(buf_)中，当这个buf_写满之后将其
+ * flush到所绑定的文件当中(flush所做的事情就是将以buf_为起始位置
+ * 长度为64 * 1024 = 65536的这段内容写入指定的fd当中去), flush完毕
+ * 之后将pos_重置为0, 然后重新利用这个buf_
+ */
 class PosixWritableFile : public WritableFile {
  private:
   // buf_[0, pos_-1] contains data to be written to fd_.
@@ -254,6 +268,10 @@ class PosixWritableFile : public WritableFile {
       return s;
     }
 
+    // 如果当前要写入的数据比缓冲区要小，那么先将其写入到缓冲区中，
+    // 否则直接利用所绑定的fd直接将内容写入到文件当中去
+    // 其实走到这里，表明缓冲区中已经没有将要写入文件中的数据(前面
+    // 已经执行了FlushBuffered()逻辑), 所以在这里才能直接WriteRaw
     // Small writes go to buffer, large writes are written directly.
     if (n < kBufSize) {
       memcpy(buf_, p, n);
