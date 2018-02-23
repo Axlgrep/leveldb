@@ -95,6 +95,8 @@ void PutVarint64(std::string* dst, uint64_t v) {
   dst->append(buf, ptr - buf);
 }
 
+// 首先在以dst为起始位置，长度为4 Bytes的区间内存储value的size, 然后
+// 在将value的内容追加到后面
 void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
   PutVarint32(dst, value.size());
   dst->append(value.data(), value.size());

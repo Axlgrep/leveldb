@@ -125,8 +125,6 @@ Writer::~Writer() {
  * Bytes的可用空间
  *
  */
-
-
 Status Writer::AddRecord(const Slice& slice) {
   const char* ptr = slice.data();
   size_t left = slice.size();

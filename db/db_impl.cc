@@ -1211,6 +1211,8 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
 
   MutexLock l(&mutex_);
   writers_.push_back(&w);
+  //当前这个Writer并没有完成并且当前这个Writer并不是writers_
+  //队列的第一个(这说明之前还有Writer需要比它先完成)，则等待
   while (!w.done && &w != writers_.front()) {
     w.cv.Wait();
   }
@@ -1223,6 +1225,9 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
   uint64_t last_sequence = versions_->LastSequence();
   Writer* last_writer = &w;
   if (status.ok() && my_batch != NULL) {  // NULL batch is for compactions
+    // 执行完BuildBatchGroup之后db_impl的成员变量tmp_batch_中存储writer_数组
+    // 中已经被合并的WriteBatch，而last_writer指向writer_数组中最后一个被合并
+    // 的WriteBatch
     WriteBatch* updates = BuildBatchGroup(&last_writer);
     WriteBatchInternal::SetSequence(updates, last_sequence + 1);
     last_sequence += WriteBatchInternal::Count(updates);

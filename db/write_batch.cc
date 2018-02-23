@@ -13,6 +13,35 @@
 //    len: varint32
 //    data: uint8[len]
 
+/*
+ * **************** WriteBatch rep_ Format ****************
+ * | <Sequence> | <Count> | <Record> |
+ *     8 Bytes    4 Bytes
+ *
+ * Sequence: 实际上就是当前这个WriteBatch的一个序列号
+ * Count: 这个数值表面后面record数组元素的数量
+ *
+ * ******************** Record Format ********************
+ * | <ValueType> |   <Len>   |   <Data>   |
+ *     1 Bytes      4 Bytes     Len Bytes
+ *
+ * 以上是Record数组中一个元素的表现形式，如果有多个元素实际上
+ * 也是按照ValueType, Len, Data这种顺序进行排列的
+ *
+ * 从上图可以很清楚的看出WriteBatch中rep_的表现形式了，
+ * 当前rep_的0 ~ 7 Bytes存储当前WriteBatch的一个序列号
+ * 当前rep_的8 ~ 11 Bytes存储当前WriteBatch的Record数组中
+ * 有多少个元素
+ * 剩余的Bytes存储这个Record数组, 数组元素的表现形式如上图
+ * Record format所示
+ *
+ * e.g..
+ * 我们在一个WriteBatch中首先Put("key","v1"), 然后再Delete("key")
+ * 那么该WriteBatch中rep_的表现形式如下:
+ * | <Sequence> | <Count> | <ValueType1> | <Len1-1> | <Data1-1> | <Len1-2> | <Data1-2> |  <ValueType2>  | <Len2> | <Data2> |
+ *     ****          2       kTypeValue       3          key         2          v1        kTypeDeletion     3        key
+ */
+
 #include "leveldb/write_batch.h"
 
 #include "leveldb/db.h"
@@ -43,6 +72,11 @@ size_t WriteBatch::ApproximateSize() {
   return rep_.size();
 }
 
+/*
+ * 这个方法的作用实际上就是遍历当前WriteBatch中的
+ * record数组，然后将其中的元素添加到memtable当中
+ * 去
+ */
 Status WriteBatch::Iterate(Handler* handler) const {
   Slice input(rep_);
   if (input.size() < kHeader) {
@@ -83,18 +117,25 @@ Status WriteBatch::Iterate(Handler* handler) const {
   }
 }
 
+// 获取rep_中8 ~ 11 Bytes中存储的数据，并将其转换成int32_t
+// 类型(实际上就是获取的当前WriteBatch中record数组中元素的
+// 数量
 int WriteBatchInternal::Count(const WriteBatch* b) {
   return DecodeFixed32(b->rep_.data() + 8);
 }
 
+// 在rep_的8 ~ 11 Bytes中存储当前WriteBatch中record数组中
+// 元素的数量
 void WriteBatchInternal::SetCount(WriteBatch* b, int n) {
   EncodeFixed32(&b->rep_[8], n);
 }
 
+// 获取当前WriteBatch的序列号
 SequenceNumber WriteBatchInternal::Sequence(const WriteBatch* b) {
   return SequenceNumber(DecodeFixed64(b->rep_.data()));
 }
 
+// 设置当前WriteBatch的序列号
 void WriteBatchInternal::SetSequence(WriteBatch* b, SequenceNumber seq) {
   EncodeFixed64(&b->rep_[0], seq);
 }
@@ -142,6 +183,9 @@ void WriteBatchInternal::SetContents(WriteBatch* b, const Slice& contents) {
   b->rep_.assign(contents.data(), contents.size());
 }
 
+// 这里实际上是将两个WriteBatch合并成一个(将src所指向的WriteBatch追加到dst所指
+// 向的WriteBatch后面), 要做的事情有两个，第一要更新src中记录record数组数量的值
+// 第二要将src中的record数组追加到dst的record数组后面去
 void WriteBatchInternal::Append(WriteBatch* dst, const WriteBatch* src) {
   SetCount(dst, Count(dst) + Count(src));
   assert(src->rep_.size() >= kHeader);
