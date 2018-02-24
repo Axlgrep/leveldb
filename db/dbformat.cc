@@ -118,6 +118,15 @@ bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
   return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
 }
 
+/*
+ * 这个方法实际上就是根据user_key 和 SequenceNumber拼接出来一个LookupKey,
+ * 这个LookupKey的格式和当初插入到memtable中的字符串的前缀是一样的(这样才
+ * 便于字典序的查找)
+ * *************************** Buf Format ***************************
+ *
+ * | <Internal Key Size> |      <Key>      | <SequenceNumber + ValueType> |
+ *       1 ~ 5 Bytes        Key Size Bytes              8 Bytes
+ */
 LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
   size_t usize = user_key.size();
   size_t needed = usize + 13;  // A conservative estimate

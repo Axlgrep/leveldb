@@ -179,6 +179,24 @@ struct SkipList<Key,Comparator>::Node {
   port::AtomicPointer next_[1];
 };
 
+/*
+ * sizeof(Node)大小由两部分构成, 一个成员变量是Key的大小, 另外一个
+ * 是port::AtomicPointer数组的大小(next_[1]), 再追加分配
+ * sizeof(port::AtomicPointer) * (height - 1)大小的空间是直接追加
+ * 到Node()结构体后面的，所以Node结构体中大小为1的port::AtomicPointer
+ * 数组就和后面分配的多个AtomicPointer对象连接起来形成了一个更大的数组
+ *
+ * e.g..
+ * 一个高度为3的Node
+ * |   <Key>   |     <AtomicPointer1>     |     <AtomicPointer2>     |     <AtomicPointer3>     |
+ * ^                                      ^                                                     ^
+ * |------------sizeof(Node)--------------|-----sizeof(port::AtomicPointer) * (height - 1)------|
+ *
+ * 其中<Key>和<AtomicPointer1>大小加在一起是sizeof(Node)
+ * <AtomicPointer2>和<AtomicPointer3>大小加在一起是
+ * sizeof(port::AtomicPointer) * (3 - 1)
+ * 而这段内存空间就可以表现为一个高度为3的Node
+ */
 template<typename Key, class Comparator>
 typename SkipList<Key,Comparator>::Node*
 SkipList<Key,Comparator>::NewNode(const Key& key, int height) {

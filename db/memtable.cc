@@ -79,6 +79,55 @@ Iterator* MemTable::NewIterator() {
   return new MemTableIterator(&table_);
 }
 
+/*
+ * 这个方法实际上是将SequenceNumber, ValueType, Key,
+ * Value这些数据合并压缩到一个buf里面去，下面我们来
+ * 看看这个buf的表现形式
+ *
+ * ******************************** Buf Format ********************************
+ *
+ * | <Internal Key Size> |      <Key>      | <SequenceNumber + ValueType> |   <Value Size>   |      <Value>      |
+ *       1 ~ 5 Bytes        Key Size Bytes              8 Bytes               1 ~ 5 Bytes       Value Size Bytes
+ *
+ * Internal Key Size ： 这个存储的是Key的长度 + 存储SequenceNumber和ValueType所需的空间(8 Bytes)
+ * 至于一个uint32_t类型的数据为什么要1 ~ 5 Bytes进行存储， 后面会细说
+ * Key : 存储了Key的内容
+ * SequenceNumber + ValueType: 这个用一个int64_t类型数字的0 ~ 7 Bytes存储ValueType,
+ * 用8 ~ 63 Bytes存储SequenceNumber
+ * Value Size : 存储的是Value的长度
+ * Value :存储了Value的内容
+ *
+ * Q: 为什么一个uint32_t类型的数据要用1 ~ 5 Bytes进行存储, 而不是4 Bytes?
+ * A: 看了leveldb的EncodeVarint32()方法之后对其有一个了解, 实际上Varint是
+ * 一紧凑的数字表示方法, 它用一个或者多个Bytes来存储数字, 数值越小的数字可
+ * 以用越少的Btyes进行存储, 这样能减少表示数字的字节数, 但是这种方法也有弊
+ * 端, 如果一个比较大的数字可能需要5 Bytes才能进行存储.
+ *
+ * 原理: 一个Byte有8个字节, 在这种表示方法中最高位字节是一个状态位，而其余
+ * 的7个字节则用于存储数据, 如果该Byte最高位字节为1, 则表示当前数字还没有
+ * 表示完毕, 还需要下一个Byte参与解析, 如果该Byte最高位字节为0, 则表示数字
+ * 部分已经解析完毕
+ *
+ * e.g..
+ * 用varint数字表示方法来存储数字104
+ * 104的二进制表现形式:  01101000
+ * 使用varint数字表现形式只需1 Byte进行存储: 01101000
+ * 这个Byte的最高位为0, 表示表示当前Byte已经是当前解析数字的末尾，
+ * 剩余7位1101000是真实数据, 暂时保留
+ * 将获取到的真实数据进行拼接 1101000 = 01101000
+ * 01101000就是104的二进制表现形式
+ *
+ * 用varint数字表示方法来存储数字11880
+ * 11880的二进制表现形式:  00101110 01101000
+ * 使用varint数字表现形式需要2 Byte进行存储: 11101000 01011100
+ * 其中第一个Byte中的最高位为1, 表示当前数字还没解析完毕还需后面的
+ * Bytes参与解析, 剩余7位1101000是真实数据, 暂时保留
+ * 第二个Byte中最高位为0, 表示当前Byte已经是当前解析数字的末尾,
+ * 剩余7位1011100是真实数据, 暂时保留
+ * 将两次获取的真实数据拼接起来 1011100 + 1101000 = 00101110 01101000
+ * 00101110 01101000就是11880的二进制表现形式
+ */
+
 void MemTable::Add(SequenceNumber s, ValueType type,
                    const Slice& key,
                    const Slice& value) {
