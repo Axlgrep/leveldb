@@ -339,6 +339,8 @@ typename SkipList<Key,Comparator>::Node* SkipList<Key,Comparator>::FindLast()
   }
 }
 
+// 实际上Node的结构十分简单, 有一个存储数据的成员变量key
+// 还有一个指针数组next_[]，数组的成员是指向后继Node节点的
 template<typename Key, class Comparator>
 SkipList<Key,Comparator>::SkipList(Comparator cmp, Arena* arena)
     : compare_(cmp),
@@ -347,9 +349,68 @@ SkipList<Key,Comparator>::SkipList(Comparator cmp, Arena* arena)
       max_height_(reinterpret_cast<void*>(1)),
       rnd_(0xdeadbeef) {
   for (int i = 0; i < kMaxHeight; i++) {
+    // 令指针数组的第i个元素指向NULL
+    // 这里实际上就是给大小为kMaxHeight的数组
+    // 赋初始值NULL
     head_->SetNext(i, NULL);
   }
 }
+
+/* head_    "a"     "b"     "c"     "e"     "f"
+ *  __       _       _       _       _       _
+ * | 0| --> |0| --> |0| --> |0| --> |0| --> |0| --> NULL
+ * | 1| --------/   |1|---------/   |1| ----------> NULL
+ * | 2| -----------------------/    |2| ----------> NULL
+ * | 3|
+ * | 4|
+ * | 5|
+ * | 6|
+ * | 7|
+ * | 8|
+ * | 9|
+ * |10|
+ * |11|
+ *  ——
+ *
+ *  leveldb中的skiplist最高层数为12(kMaxHeight为12), 上图所示的
+ *  skiplist的高度为3(因为除head_以外最高的节点"d"高度为3), 我们
+ *  可以把leveldb中的skiplist看成一个简单的单链表，但是这个链表
+ *  上的每个结点不单单只包含指向下一个结点的指针，可能包含很多个
+ *  指向后续结点的指针，这样就可以快速的跳过一些不必要的结点，从
+ *  而加快查找速度，对于链表内的结点拥有1 ~ kMaxHeight个指针，一
+ *  结点拥有多少个指向后续元素的指针，这个过程是根据一个随机函数
+ *  生成的
+ *
+ *  往skiplist中插入一个结点的大体步骤有三步
+ *  我们假设当前skiplist的高度为cur_height
+ *
+ *  1. 在各层中(1 ~ cur_height)找到该结点插入位置的前一个结点的指针, 用一个
+ *  零时的指针数组prev[kMaxHeight]进行记录(这步执行完毕之后prev[0 ~ cur_height-1]
+ *  应该是指向各层级当中该结点插入位置的前一个结点的指针, 然后找到指向该结点插入位
+ *  置后一个结点的指针(x), 如果插入位置后面没有结点了，那么这个指针指向的就是NULL.
+ *
+ *  2. 利用一个随机函数生成当前结点的高度random_height(这个高度不得高于kMaxHeight),
+ *  此时如果random_height > cur_height, 那么令prev[cur_height ~ random_height - 1]
+ *  分别指向head_.next_[cur_height ~ random_height - 1], (刚到达一个新的高度h时，该
+ *  层肯定是没有任何数据结点的，所以前置结点肯定是head_.next[h], 而后置结点就是NULL)
+ *  并且更新当前skiplist的高度cur_height = random_height(链表中最高的那个结点的高度, 就是skiplist的高度)
+ *  此时如果random_height < cur_height，便什么也不用做, 因为prev[0 ~ random_height - 1]
+ *  都已经被赋值了，也就是说各层中该结点插入位置的前置结点的位置都已经找到.
+ *
+ *  3. 生成高度为random_height的新结点(new_node), 然后修改指针指向就可以了，这里
+ *  以第一层为例.
+ *
+ *  e.g..
+ *    new_node指的是我们新生成的结点
+ *    new_node.next_[0]指的是新节点第1层所指向的后继结点
+ *    prev[0].next_[0]指的是当前新插入结点的前一个结点原先指向的后继结点
+ *
+ *    第一步我们要做得是令新结点的第一层的后继结点指针指向前一个结点原先指向的后继结点
+ *    new_node.next_[0] = prev[0].next_[0]
+ *    然后我们要做的就是令新节点作为前一个结点的后继结点
+ *    prev[0].next_[0] = &new_node
+ *
+ */
 
 template<typename Key, class Comparator>
 void SkipList<Key,Comparator>::Insert(const Key& key) {
