@@ -11,6 +11,9 @@
 
 namespace leveldb {
 
+// 这里做的是先解析当前要获取数据的长度，同时p跳过前面表示
+// 数据长度的几个Byte, 然后p ~ p + len就是我们要获取数据的
+// 区间
 static Slice GetLengthPrefixedSlice(const char* data) {
   uint32_t len;
   const char* p = data;
@@ -156,6 +159,7 @@ void MemTable::Add(SequenceNumber s, ValueType type,
 
 bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
   Slice memkey = key.memtable_key();
+  // 这个Iterator的实现在skiplist.h里面
   Table::Iterator iter(&table_);
   iter.Seek(memkey.data());
   if (iter.Valid()) {
@@ -170,6 +174,9 @@ bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
     // all entries with overly large sequence numbers.
     const char* entry = iter.key();
     uint32_t key_length;
+    // 这里是解析key的长度，然后取出key来和传入的key进行对比
+    // 如果key是一样的则取出类型来进行比较，是kTypeValue
+    // 还是kTypeDeletion
     const char* key_ptr = GetVarint32Ptr(entry, entry+5, &key_length);
     if (comparator_.comparator.user_comparator()->Compare(
             Slice(key_ptr, key_length - 8),

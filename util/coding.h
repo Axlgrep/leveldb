@@ -86,6 +86,20 @@ inline uint64_t DecodeFixed64(const char* ptr) {
 extern const char* GetVarint32PtrFallback(const char* p,
                                           const char* limit,
                                           uint32_t* value);
+/*
+ * 在memtable.cc中的Add()方法上解析过这个varint数字表示法
+ * 可以依照数字的大小用1 ~ 5个Bytes来存储一个int32_t类型的
+ * 数字.
+ *
+ * 这里的意思是，如果p所指向的第一个Bytes中的第一个bit是0的
+ * 话，则表示当前数字已经表示完毕，无需下一个Bytes再参与解析
+ * 当前这个数字的值就是*(reinterpret_cast<const unsigned char*>(p))
+ * 如果p所指向的第一个Bytes中的第一个bit不是1, 则表示当前数字
+ * 还没有表示完毕，还需要下一个Bytes参与解析，我们可以调用
+ * GetVarint32PtrFallback()方法来解析数字。
+ * 最后的返回值是指向p跳过几个表示数字的前缀后的位置(return_value = p + (1 ~ 5))
+ *
+ */
 inline const char* GetVarint32Ptr(const char* p,
                                   const char* limit,
                                   uint32_t* value) {

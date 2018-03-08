@@ -1144,6 +1144,9 @@ Status DBImpl::Get(const ReadOptions& options,
   {
     mutex_.Unlock();
     // First look in the memtable, then in the immutable memtable (if any).
+    // 这边是先从memtable中去找，然后再从immutable memtable中去找, 如果
+    // 都找不到， 最后到sst文件中去找, 由于memtable和immutable memtable都是
+    // 用skiplist实现的，所以查找过程完全一样
     LookupKey lkey(key, snapshot);
     if (mem->Get(lkey, value, &s)) {
       // Done

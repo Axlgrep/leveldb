@@ -97,12 +97,21 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  // 当我们写完一个Raw Block以后要记录下一些数据
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
+    // 计算出大于或者等于当前Block中最大Key的那个Key(我们称为索引Key)
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
+    // 记录当前Raw Block在文件中的位置距离文件起始位置的偏移量
+    // 记录当前block_content的size (注意，这里不是整个Raw Block的
+    // 大小而是KV数据和restarts_这些数据的大小, 我们称为Data Block)
     r->pending_handle.EncodeTo(&handle_encoding);
+    // 将我们计算出来的当前Block的索引Key, 以及当前Block距离文件起始
+    // 位置的偏移量和Block大小添加到index_block当中(实际上index_block
+    // 的结构和Data Block是一模一样的, 就是会有重启点, 和共享前缀这些)
     r->index_block.Add(r->last_key, Slice(handle_encoding));
+    // 将其置为false, 表示当前Raw Block已经处理完毕
     r->pending_index_entry = false;
   }
 
@@ -171,6 +180,24 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   r->compressed_output.clear();
   block->Reset();
 }
+
+/*
+ * 这个方法是将当前的数据Block转换成RawBlock写入到文件当中, 做的事情也比较简单
+ * 就是在根据Data Block算出CRC, 然后在Data Block后面追加上CompressionType和CRC
+ * 这便是RawBlock, 我们将这个RawBlock追加到文件的尾部，然后更新文件偏移量。
+ *
+ * ******************************** Raw Block Format ********************************
+ *
+ * |   <Data Block>   |   <Type>   |   <CRC>   |
+ *       * Bytes         1 Bytes      4 Bytes
+ *
+ * 这里的<Block>的存储的是用户的KV数据，然后Block的尾部存储重启点集合和重启点集合大小
+ * 详细可以参照block_builder.cc里的Add()方法上有详细的注释.
+ * 这里的<Type>占用1 Bytes, 记录的是数据的压缩方案目前支持两种kNoCompression和kSnappyCompression.
+ * 最后的<CRC>占用4 Bytes, 记录的是数据校验码，是根据block_contents生成的一个uint32_t类型的整数,
+ * 用于判别数据是否在生成和传输中出错.
+ *
+ */
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type,

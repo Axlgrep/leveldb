@@ -37,6 +37,7 @@ Status BuildTable(const std::string& dbname,
     for (; iter->Valid(); iter->Next()) {
       Slice key = iter->key();
       meta->largest.DecodeFrom(key);
+      // 这里的key实际上是带上了SequenceNumber和ValueType的
       builder->Add(key, iter->value());
     }
 
