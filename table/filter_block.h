@@ -26,6 +26,27 @@ class FilterPolicy;
 //
 // The sequence of calls to FilterBlockBuilder must match the regexp:
 //      (StartBlock AddKey*)* Finish
+
+/*
+ * 这个过滤器的作用是将我们添加的key进行一系列Hash算法然后压缩到一个result_
+ * 字符串里面去，以后我们就可以根据这个result_快速的查找某一个key我们之前是
+ * 否添加过, 大概是这样, 没有细看
+ *
+ * keys_是一个字符串, 我们新添加进来的key都依次追加到keys_字符串的后面
+ * start_集合中元素的类型是整形, 存储的是keys_字符串中各个key的起始位置
+ * tmp_keys_中的元素类型是Slice, Slice存储了指向keys_字符串中各个key的起始位置的指针以及当前key的长度
+ *
+ * e.g..
+ *   我们有一组key: axl, neil, dire
+ *
+ *   下标:     0     1     2     3     4     5     6     7     8     9     10
+ *   keys:  |  a  |  x  |  l  |  n  |  e  |  i  |  l  |  d  |  i  |  r  |  e  |
+ *   地址:    0x0   0x1   0x2   0x3   0x4   0x5   0x6   0x7   0x8   0x9   0x10
+ *
+ *   start_:    [0][3][7]
+ *   tmp_keys_: [Slice(0x0, 3)][Slice(0x3, 4)][Slice(0x7, 4)]
+ *
+ */
 class FilterBlockBuilder {
  public:
   explicit FilterBlockBuilder(const FilterPolicy*);

@@ -89,6 +89,7 @@ Status TableBuilder::ChangeOptions(const Options& options) {
   return Status::OK();
 }
 
+
 void TableBuilder::Add(const Slice& key, const Slice& value) {
   Rep* r = rep_;
   assert(!r->closed);
@@ -144,6 +145,47 @@ void TableBuilder::Flush() {
     r->filter_block->StartBlock(r->offset);
   }
 }
+
+/*
+ *                 Raw Block
+ *
+ *           |-------------------|
+ *           |      Entry 1      |  Entry1, Entry2... 是按照字典序进
+ *           |-------------------|  行排列的, 其中含有shared,
+ *           |      Entry 2      |  non_shared, value_size... 等等一
+ *           |-------------------|  些字段，实际上存储的就是KV键值对,
+ *           |      Entry 3      |  详细可看block_builder.cc的Add()方
+ *           |-------------------|  法上有注释.
+ *           |      Entry 4      |
+ *           |-------------------|
+ *           |        ...        |
+ *           |-------------------|
+ *  4 Bytes  |    restarts[0]    |  leveldb中每隔固定条数的Entry会强
+ *           |-------------------|  制加入一个重启点, 这里存储的数组
+ *  4 Bytes  |    restarts[2]    |  restarts实际上就是指向这些重启点
+ *           |-------------------|  的.
+ *  4 Bytes  |    restarts[3]    |
+ *           |-------------------|
+ *  4 Bytes  |         3         |  重启点数组的大小
+ *           |-------------------|
+ *  1 Byte   |  CompressionType  |  数据的压缩方式, 是kSnappy或者kNo
+ *           |-------------------|
+ *  4 Bytes  |        CRC        |  根据上方除了CompressionType计算出来的一个校验值
+ *           |-------------------|
+ *
+ *  上图是一个完整的Raw Block.
+ *
+ *  对于Index Block: 每当写完一个完整的Raw Block都会计算出一个索引key(大
+ *  于或者等于当前Block中最大Key的那个Key), 以及当前Raw Block在文件中距
+ *  离文件起始位置的偏移量以及当前Data Block(在这里Raw Block去掉CompressionType
+ *  和CRC我们称为Data Block)的大小, 我们会将索引key, 当前data block的偏移量
+ *  以及当前data block的大小当做一条Entry写入到Index Block当中.
+ *
+ *  对于Filter Block: 我们会根据当前这个Data Block添加的所有Key计算出一个
+ *  字符串str追加到result_后面(以后当我们给出一个key我们可以根据这个str
+ *  快速的查出当前Block中是否存在这个key了), 然后我们还会将str在result_中
+ *  的起始位置添加到filter_offsets_当中.
+ */
 
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:

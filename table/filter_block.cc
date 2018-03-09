@@ -33,6 +33,22 @@ void FilterBlockBuilder::AddKey(const Slice& key) {
   keys_.append(k.data(), k.size());
 }
 
+/*
+ * 这个方法在原始的result_后面追加offsets数据
+ * 方便查找每个Raw Block对应的result_段落
+ *
+ *          |------------------|
+ *          |  origin result_  |
+ *          |------------------|
+ * 4 Bytes  |   offsets_[0]    | --> 对应于Raw Block 0
+ *          |------------------|
+ * 4 Bytes  |   offsets_[1]    | --> 对应于Raw Block 1
+ *          |------------------|
+ * 4 Bytes  |   offsets_[2]    | --> 对应于Raw Block 2
+ *          |------------------|
+ * 4 Bytes  |        3         | --> offsets_集合有三个元素
+ *          |------------------|
+ */
 Slice FilterBlockBuilder::Finish() {
   if (!start_.empty()) {
     GenerateFilter();
@@ -49,6 +65,11 @@ Slice FilterBlockBuilder::Finish() {
   return Slice(result_);
 }
 
+/*
+ * 这个方法是根据新添加的key生成一段字符串添加到result_后面
+ * result_的作用可以理解为一个表, 我们给出一个key可以快速的
+ * 查到在result_中是否存在
+ */
 void FilterBlockBuilder::GenerateFilter() {
   const size_t num_keys = start_.size();
   if (num_keys == 0) {
