@@ -29,6 +29,35 @@ Status BlockHandle::DecodeFrom(Slice* input) {
   }
 }
 
+/*
+ *  用来编码文件的Footer, Footer包含Meta Block
+ *  在文件中的位置以及Meta Block的大小以及
+ *  Index Block在文件中的位置和Index Block的大
+ *  小以及文件尾部的"魔数"
+ *
+ *  Q: 为什么要添加Padding?
+ *  A: 由于这里记录这些Block的位置以及大小是使用
+ *     的紧凑型的数字表示法, 所以表示一个int64_t
+ *     的数字使用的空间在1 ~ 10个Bytes不等, 为了
+ *     我们从尾部能快速的找到Footer的在文件中的起
+ *     始位置(8 + 4 * 10)Bytes, 所以我们在这里加
+ *     入了Padding进行填充
+ *
+ *                  |---------------------|
+ *   1 ~ 10 Bytes   |  Meta Block offset  |
+ *                  |---------------------|
+ *   1 ~ 10 Bytes   |   Meta Block size   |
+ *                  |---------------------|
+ *   1 ~ 10 Bytes   | Index Block offset  |
+ *                  |---------------------|
+ *   1 ~ 10 Bytes   |  Index Block size   |
+ *                  |---------------------|
+ *                  |       Padding       |
+ *                  |---------------------|
+ *     8 Bytes      |     MagicNumber     |
+ *                  |---------------------|
+ */
+
 void Footer::EncodeTo(std::string* dst) const {
   const size_t original_size = dst->size();
   metaindex_handle_.EncodeTo(dst);

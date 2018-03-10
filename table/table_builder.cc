@@ -89,6 +89,47 @@ Status TableBuilder::ChangeOptions(const Options& options) {
   return Status::OK();
 }
 
+/*
+ *                 Raw Block
+ *
+ *           |-------------------|
+ *           |      Entry 1      |  Entry1, Entry2... 是按照字典序进
+ *           |-------------------|  行排列的, 其中含有shared,
+ *           |      Entry 2      |  non_shared, value_size... 等等一
+ *           |-------------------|  些字段，实际上存储的就是KV键值对,
+ *           |      Entry 3      |  详细可看block_builder.cc的Add()方
+ *           |-------------------|  法上有注释.
+ *           |      Entry 4      |
+ *           |-------------------|
+ *           |        ...        |
+ *           |-------------------|
+ *  4 Bytes  |    restarts[0]    |  leveldb中每隔固定条数的Entry会强
+ *           |-------------------|  制加入一个重启点, 这里存储的数组
+ *  4 Bytes  |    restarts[2]    |  restarts实际上就是指向这些重启点
+ *           |-------------------|  的.
+ *  4 Bytes  |    restarts[3]    |
+ *           |-------------------|
+ *  4 Bytes  |         3         |  重启点数组的大小
+ *           |-------------------|
+ *  1 Byte   |  CompressionType  |  数据的压缩方式, 是kSnappy或者kNo
+ *           |-------------------|
+ *  4 Bytes  |        CRC        |  根据上方除了CompressionType计算出来的一个校验值
+ *           |-------------------|
+ *
+ *  上图是一个完整的Raw Block.
+ *
+ *  对于Index Block: 每当写完一个完整的Raw Block都会计算出一个索引key(大
+ *  于或者等于当前Block中最大Key的那个Key), 以及当前Raw Block在文件中距
+ *  离文件起始位置的偏移量以及当前Data Block(在这里Raw Block去掉CompressionType
+ *  和CRC我们称为Data Block)的大小, 我们会将索引key, 当前data block的偏移量
+ *  以及当前data block的大小当做一条Entry写入到Index Block当中.
+ *
+ *  对于Filter Block: 我们会根据当前这个Data Block添加的所有Key计算出一个
+ *  字符串str追加到result_后面(以后当我们给出一个key我们可以根据这个str
+ *  快速的查出当前Block中是否存在这个key了), 然后我们还会将str在result_中
+ *  的起始位置添加到filter_offsets_当中.
+ */
+
 
 void TableBuilder::Add(const Slice& key, const Slice& value) {
   Rep* r = rep_;
@@ -145,47 +186,6 @@ void TableBuilder::Flush() {
     r->filter_block->StartBlock(r->offset);
   }
 }
-
-/*
- *                 Raw Block
- *
- *           |-------------------|
- *           |      Entry 1      |  Entry1, Entry2... 是按照字典序进
- *           |-------------------|  行排列的, 其中含有shared,
- *           |      Entry 2      |  non_shared, value_size... 等等一
- *           |-------------------|  些字段，实际上存储的就是KV键值对,
- *           |      Entry 3      |  详细可看block_builder.cc的Add()方
- *           |-------------------|  法上有注释.
- *           |      Entry 4      |
- *           |-------------------|
- *           |        ...        |
- *           |-------------------|
- *  4 Bytes  |    restarts[0]    |  leveldb中每隔固定条数的Entry会强
- *           |-------------------|  制加入一个重启点, 这里存储的数组
- *  4 Bytes  |    restarts[2]    |  restarts实际上就是指向这些重启点
- *           |-------------------|  的.
- *  4 Bytes  |    restarts[3]    |
- *           |-------------------|
- *  4 Bytes  |         3         |  重启点数组的大小
- *           |-------------------|
- *  1 Byte   |  CompressionType  |  数据的压缩方式, 是kSnappy或者kNo
- *           |-------------------|
- *  4 Bytes  |        CRC        |  根据上方除了CompressionType计算出来的一个校验值
- *           |-------------------|
- *
- *  上图是一个完整的Raw Block.
- *
- *  对于Index Block: 每当写完一个完整的Raw Block都会计算出一个索引key(大
- *  于或者等于当前Block中最大Key的那个Key), 以及当前Raw Block在文件中距
- *  离文件起始位置的偏移量以及当前Data Block(在这里Raw Block去掉CompressionType
- *  和CRC我们称为Data Block)的大小, 我们会将索引key, 当前data block的偏移量
- *  以及当前data block的大小当做一条Entry写入到Index Block当中.
- *
- *  对于Filter Block: 我们会根据当前这个Data Block添加的所有Key计算出一个
- *  字符串str追加到result_后面(以后当我们给出一个key我们可以根据这个str
- *  快速的查出当前Block中是否存在这个key了), 然后我们还会将str在result_中
- *  的起始位置添加到filter_offsets_当中.
- */
 
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:
@@ -265,12 +265,72 @@ Status TableBuilder::status() const {
   return rep_->status;
 }
 
+/*
+ *   下图就是整个Table在文件中的物理布局形式, 我们读取到该文件之后首先从最后48字节中
+ *   读取到该Table的Footer.
+ *   通过Footer中我们可以获取到IndexBlock在文件中的起始位置和该Block的大小, 通过解析
+ *   Index Block, 我们可以获取到文件中每个Raw Block在文件中的位置信息和每个Raw Block
+ *   的索引Key, 这样就可以快速的定位到我们当前需要查询的Key可能存在于哪个Raw Block当
+ *   中.
+ *   通过Footer我们还可以获取到MetaIndex Block, MetaIndex Block中含有Filter Block在
+ *   文件中的起始位置和该Block的大小, 我们通过解析Filter Block可以获取到对应于每段
+ *   Raw Block的布隆过滤器的关键字符串, 通过这个字符串我们可以判断对应Raw Block是否
+ *   存在我们需要查询的Key.
+ *   至此, 一个Table建立的过程以及最后Table的结构已经完全介绍完毕.
+ *
+ *            |-------------------|---
+ *            |    Raw Block 1    |   \
+ *            |-------------------|    |
+ *            |    Raw Block 2    |    |
+ *            |-------------------|      --> Raw Block中存储了真实的数据以及重启点等信息
+ *            |    Raw Block 3    |    |     具体可以看本文件中TableBuilder::Add()方法上
+ *            |-------------------|    |     方有注释
+ *            |        ...        |   /
+ *            |-------------------|---
+ *            |      result_      |   \
+ *            |-------------------|    |
+ *  4 Bytes   |    offsets_[0]    |    |
+ *            |-------------------|    |
+ *  4 Bytes   |    offsets_[1]    |    |
+ *            |-------------------|    |
+ *  4 Bytes   |    offsets_[2]    |    |
+ *            |-------------------|      --> 这部分是Filter Block, 其中result_是由各个Data Block中的Key通过Hash计算出来的特征字符串拼接
+ *            |        ...        |    |     来的, 下面有一个offset_数组, offset_[0]记录result_中属于Data Block 1的特征字符串的起始位置,
+ *            |-------------------|    |     n记录的是这个offset_数组的元素数量.
+ *  4 Bytes   |         n         |    |
+ *            |-------------------|    |
+ *  1 Byte    |  kNoCompression   |    |
+ *            |-------------------|    |
+ *  4 Bytes   |        CRC        |   /
+ *            |-------------------|---
+ *            |  MetaIndex Block  |      --> 用于记录Filter的名称，以及上方Filter Block的起始位置和大小(该Block尾部也包含压缩方式和CRC)
+ *            |-------------------|---
+ *            |  Pending Entry 1  |   \
+ *            |-------------------|    |
+ *            |  Pending Entry 2  |    |
+ *            |-------------------|    |
+ *            |  Pending Entry 3  |    |
+ *            |-------------------|      --> 这部分是Index Block, 其中的Pending Entry 1中包含Raw Block 1的索引Key, 以及Raw Block 1在文件
+ *            |        ...        |    |     中的位置信息, 以及Raw Block 1的大小.
+ *            |-------------------|    |
+ *  1 Bytes   |  kNoCompression   |    |
+ *            |-------------------|    |
+ *  4 Bytes   |        CRC        |   /
+ *            |-------------------|---
+ *  48 Bytes  |       Footer      |      --> 包含MetaIndex Block的Index Block的索引信息(在文件中的位置以及大小), 和魔数, 具体细节可以看format.cc的Footer::EncodeTo();
+ *            |-------------------|
+ *
+ */
+
 Status TableBuilder::Finish() {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
   r->closed = true;
 
+  // BlockHandle的作用是记录各个Block在文件中的位置以及
+  // 各个Block的大小, 并且其中有方法将这个两个数据编码为
+  // 一个字符串
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
   // Write filter block
