@@ -61,6 +61,24 @@ struct LRUHandle {
   }
 };
 
+
+/*
+ * HandleTable实际上就是一个数组, 数组的元素就是指向LRUHandle的指针，
+ * 然后前一个LRUHandle又指向下一个LRUHandle(所以我们也可以说数组的每
+ * 元素是一个链表的head)
+ *
+ *       |------------|
+ *       |      0     | --> NULL
+ *       |------------|
+ *       |      1     | --> node1-1 -> node1-2 -> NULL
+ *       |------------|
+ *       |      2     | --> node2-1 -> NULL
+ *       |------------|
+ *       |     ...    |
+ *       |------------|
+ *       | length - 1 | --> NULL
+ *       |------------|
+ */
 // We provide our own simple hash table since it removes a whole bunch
 // of porting hacks and is also faster than some of the built-in hash
 // table implementations in some of the compiler/runtime combinations
@@ -74,6 +92,41 @@ class HandleTable {
   LRUHandle* Lookup(const Slice& key, uint32_t hash) {
     return *FindPointer(key, hash);
   }
+
+  /* e.g..
+   *
+   *  head_ -> NULL
+   *  这是一个空链表的初始状态, 这时候我们要插入一个node_a, 我们通过
+   *  FindPointer()方法会返回一个指向head_的指针(head_本身就是一个指
+   *  针,head_的初值为NULL), old = *ptr, 那么old == NULL, 接着我们再
+   *  为结点的后继指针赋值, node_a->next_hash = NULL, (这里没有后继结
+   *  点, 所以是NULL), 最后令*ptr = &node_a(在这里我们完全可以把*ptr
+   *  等同于head_, 就是我们的head_指向了node_a.
+   *
+   *  插入第一个结点以后的链表为:
+   *  head_ -> node_a -> NULL
+   *
+   *
+   *  此时我再在该链表中插入第二个结点node_b1, 我们通过FindPointer()
+   *  方法会返回一个指向node_a->next_hash的指针, 由于*ptr的值在当前
+   *  实际上就是node_a->next_hash的值, 所以old == NULL, 然后我们再令
+   *  node_b1->next_hash = NULL, 最后令*ptr = &node_b1, 我们就完成了
+   *  node_b1的插入(*ptr = &node_b1相当于node_a->next_hash = node_b1)
+   *
+   *  插入第二个结点以后的链表为:
+   *  head_ -> node_a -> node_b1 -> NULL
+   *
+   *  如果此时我们再插入一个与node_b1拥有相同key和hash的node_b2, 我们通过
+   *  FindPointer()方法会也会返回一个指向node_a->next_hash的指针(由于链表中
+   *  已经存在与我们当前插入结点key, hash相同的结点了, 所以没有遍历到链表
+   *  的末尾就提前返回了), 此时old == &node_b1, 然后我们将node_b2的后继结
+   *  点指针指向node_b1后继结点指针指向的内容, 由于node_b1->next_hash为NULL
+   *  所以node_b2->next_hash也指向NULL, 最后令*ptr = &node_b2, 我们就完成
+   *  了node_b2的插入(*ptr = &node_b2相当于node_a->next_hash = node_b2)
+   *
+   *  最后链表状态为:
+   *  head_ -> node_a -> node_b2 -> NULL
+   */
 
   LRUHandle* Insert(LRUHandle* h) {
     LRUHandle** ptr = FindPointer(h->key(), h->hash);
@@ -108,6 +161,31 @@ class HandleTable {
   uint32_t elems_;
   LRUHandle** list_;
 
+  // 这是整个HandleTable最关键的一个方法, 作用是给出一个key和他
+  // 与之对应的hash值, 在HandleTable中找出指向其所在的位置的指针,
+  // 并且返回一个指向这个指针的指针
+  //
+  // 首先根据hash值和当前数组的长度信息进行位运算，得出当前给定的
+  // key应该在哪个链表当中, 然后获取到这个链表的head.
+  // 获取到这个链表的head之后我们遍历这个链表的每个结点, 逐一匹配
+  // key和hash值.
+  //
+  // 返回的指针分为三种情况
+  //
+  // 空链表的情况
+  // head_ -> NULL
+  // 那么这时候就是返回一个指向head_指针的指针
+  //
+  // 目标结点在链表中已经存在的情况
+  // head_ -> node_a -> node_b -> node_c -> NULL
+  // 这时候我们如果要找node_b结点，那么返回的是
+  // 一个指向node_a->next_hash指针的指针
+  //
+  // 目标结点在链表中不存在的情况
+  // head_ -> node_a -> node_b -> node_c -> NULL
+  // 这时候如果我们需要寻找node_d结点, 那么返回的
+  // 是一个指向node_c->next_hash指针的指针
+  //
   // Return a pointer to slot that points to a cache entry that
   // matches key/hash.  If there is no such cache entry, return a
   // pointer to the trailing slot in the corresponding linked list.
@@ -120,6 +198,7 @@ class HandleTable {
     return ptr;
   }
 
+  // 这就是一个扩容然后rehash的操作
   void Resize() {
     uint32_t new_length = 4;
     while (new_length < elems_) {
