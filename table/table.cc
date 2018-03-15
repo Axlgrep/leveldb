@@ -51,10 +51,14 @@ Status Table::Open(const Options& options,
   if (!s.ok()) return s;
 
   Footer footer;
+  // 从文件末尾获取MetaIndex Block和Index Block的相关信息
+  // 比如Block距离文件起始位置的偏移量以及Block的大小
   s = footer.DecodeFrom(&footer_input);
   if (!s.ok()) return s;
 
   // Read the index block
+  // 获取Index Block中的内容(Index Block中存储的是各个Raw Block在文件中的位置
+  // 信息以及与其对应的索引Key).
   BlockContents index_block_contents;
   if (s.ok()) {
     ReadOptions opt;

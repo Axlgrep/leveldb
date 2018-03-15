@@ -104,12 +104,16 @@ FilterBlockReader::FilterBlockReader(const FilterPolicy* policy,
       num_(0),
       base_lg_(0) {
   size_t n = contents.size();
+  // 最后一个字节存储kFilterBaseLg, 然后倒数5 ~ 2个字节存储的是result_字符串的大小
   if (n < 5) return;  // 1 byte for base_lg_ and 4 for start of offset array
   base_lg_ = contents[n-1];
   uint32_t last_word = DecodeFixed32(contents.data() + n - 5);
   if (last_word > n - 5) return;
+  // data_指向result_字符串的起始位置
   data_ = contents.data();
+  // offset_指向offset_数组的起始位置
   offset_ = data_ + last_word;
+  // num_存储着offset_数组的大小
   num_ = (n - 5 - last_word) / 4;
 }
 

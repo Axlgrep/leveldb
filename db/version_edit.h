@@ -86,12 +86,12 @@ class VersionEdit {
 
   typedef std::set< std::pair<int, uint64_t> > DeletedFileSet;
 
-  std::string comparator_;
+  std::string comparator_;            //比较器的名称
   uint64_t log_number_;
   uint64_t prev_log_number_;
   uint64_t next_file_number_;
   SequenceNumber last_sequence_;
-  bool has_comparator_;
+  bool has_comparator_;               //是否有比较器
   bool has_log_number_;
   bool has_prev_log_number_;
   bool has_next_file_number_;

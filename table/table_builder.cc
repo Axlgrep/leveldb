@@ -296,8 +296,8 @@ Status TableBuilder::status() const {
  *  4 Bytes   |    offsets_[2]    |    |
  *            |-------------------|      --> 这部分是Filter Block, 其中result_是由各个Data Block中的Key通过Hash计算出来的特征字符串拼接
  *            |        ...        |    |     来的, 下面有一个offset_数组, offset_[0]记录result_中属于Data Block 1的特征字符串的起始位置,
- *            |-------------------|    |     n记录的是这个offset_数组的元素数量.
- *  4 Bytes   |         n         |    |
+ *            |-------------------|    |     last_word记录的是result_字符串的大小
+ *  4 Bytes   |    last_word      |    |
  *            |-------------------|    |
  *  1 Byte    |  kNoCompression   |    |
  *            |-------------------|    |
@@ -320,6 +320,9 @@ Status TableBuilder::status() const {
  *  48 Bytes  |       Footer      |      --> 包含MetaIndex Block的Index Block的索引信息(在文件中的位置以及大小), 和魔数, 具体细节可以看format.cc的Footer::EncodeTo();
  *            |-------------------|
  *
+ *  其中RawBlock和MetaIndexBlock还有IndexBlock内部的结构都是一样的，将每个KV编码成一个条目之后添加到Block当中
+ *  然后如果前一个条目和当前条目有前缀重叠部分, 那么就会通过共享前缀来节约空间, 每隔固定的条目该Block都会强制
+ *  加入一个重启点, 该Block的尾部会加入重启点数组, 以及重启点数组的大小
  */
 
 Status TableBuilder::Finish() {

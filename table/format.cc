@@ -69,7 +69,13 @@ void Footer::EncodeTo(std::string* dst) const {
   (void)original_size;  // Disable unused variable warning.
 }
 
+/*
+ * 我们输入一段Footer数据， 然后我们解析之后先进行魔术匹配
+ * 解析出Meta Block在文件中的offset和size
+ * 然后解析出Index Block在文件中的offset和size
+ */
 Status Footer::DecodeFrom(Slice* input) {
+  //Footer的最后8位为魔术, 首先进行魔数的匹配
   const char* magic_ptr = input->data() + kEncodedLength - 8;
   const uint32_t magic_lo = DecodeFixed32(magic_ptr);
   const uint32_t magic_hi = DecodeFixed32(magic_ptr + 4);
@@ -114,6 +120,7 @@ Status ReadBlock(RandomAccessFile* file,
     return Status::Corruption("truncated block read");
   }
 
+  // 如果需要CRC的校验就进行校验
   // Check the crc of the type and the block contents
   const char* data = contents.data();    // Pointer to where Read put the data
   if (options.verify_checksums) {

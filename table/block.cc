@@ -24,14 +24,19 @@ Block::Block(const BlockContents& contents)
     : data_(contents.data.data()),
       size_(contents.data.size()),
       owned_(contents.heap_allocated) {
+  // 都不够容纳一个表示重启点数组大小的情况
   if (size_ < sizeof(uint32_t)) {
     size_ = 0;  // Error marker
   } else {
+    // 一个Block的size_减去sizeof(uint32_t)剩余的空间用来存储数据和
+    // 重启点数组, 这里主要是判断剩余的空间是否足够用来存储重启点数组
     size_t max_restarts_allowed = (size_-sizeof(uint32_t)) / sizeof(uint32_t);
     if (NumRestarts() > max_restarts_allowed) {
       // The size is too small for NumRestarts()
       size_ = 0;
     } else {
+      // restart_offset_ 指向重启点数组的开始位置
+      // 下面的1表示记录重启点数组的大小的那个变量, NumRestarts()表示重启数组的大小
       restart_offset_ = size_ - (1 + NumRestarts()) * sizeof(uint32_t);
     }
   }
@@ -96,6 +101,8 @@ class Block::Iter : public Iterator {
     return (value_.data() + value_.size()) - data_;
   }
 
+  // restarts_指向的是该Block中重启点数组的起始位置
+  // 通道index偏移量我们就能获取数组中对应位置的数据了
   uint32_t GetRestartPoint(uint32_t index) {
     assert(index < num_restarts_);
     return DecodeFixed32(data_ + restarts_ + index * sizeof(uint32_t));

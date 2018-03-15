@@ -89,6 +89,7 @@ class HandleTable {
   HandleTable() : length_(0), elems_(0), list_(NULL) { Resize(); }
   ~HandleTable() { delete[] list_; }
 
+  // 返回指向HandleTable中与key和hash都匹配的结点的指针
   LRUHandle* Lookup(const Slice& key, uint32_t hash) {
     return *FindPointer(key, hash);
   }
