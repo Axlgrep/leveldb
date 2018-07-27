@@ -1265,6 +1265,17 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
     versions_->SetLastSequence(last_sequence);
   }
 
+  //      w                last_writer
+  //   writer1 -> writer2 -> writer3 -> writer4 -> writer5 -> ...
+  //    done       done       done         x          x
+  //
+  // 当当前队头Writer完成自身并且顺带完成了后续的几个Writer之后
+  // 需要更新状态，
+  // 如上图所示， 当前writer1完成时顺带将writer2, writer3完成, 这时候
+  // writer2, writer3可能在其他线程里由于不是对头元素而被wait()住了，
+  // 这时候我们需要将其status和done进行赋值并且pop掉，并且调用条件变
+  // 量的Signal将其唤醒(第1219行), 唤醒之后发现其done成员变量为ture了
+  // 这时候就会返回其对应的status了;
   while (true) {
     Writer* ready = writers_.front();
     writers_.pop_front();
@@ -1273,9 +1284,15 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
       ready->done = true;
       ready->cv.Signal();
     }
+    // last_writer是本队列中被消费的最后一个条目，也就是上图中的writer3
     if (ready == last_writer) break;
   }
 
+  //
+  //   writer4 -> writer5 -> ...
+  //      x          x
+  //
+  // 如果队列不为空，调用唤醒对头元素, 也就是writer4
   // Notify new head of write queue
   if (!writers_.empty()) {
     writers_.front()->cv.Signal();

@@ -95,8 +95,8 @@ Iterator* MemTable::NewIterator() {
  * Internal Key Size ： 这个存储的是Key的长度 + 存储SequenceNumber和ValueType所需的空间(8 Bytes)
  * 至于一个uint32_t类型的数据为什么要1 ~ 5 Bytes进行存储， 后面会细说
  * Key : 存储了Key的内容
- * SequenceNumber + ValueType: 这个用一个int64_t类型数字的0 ~ 7 Bytes存储ValueType,
- * 用8 ~ 63 Bytes存储SequenceNumber
+ * SequenceNumber + ValueType: 这个用一个int64_t类型数字的0 ~ 7 Bits存储ValueType,
+ * 用8 ~ 63 Bits存储SequenceNumber
  * Value Size : 存储的是Value的长度
  * Value :存储了Value的内容
  *

@@ -83,6 +83,48 @@ class MemTable {
   void operator=(const MemTable&);
 };
 
+/*
+ * ******************************** Buf Format ********************************
+ *
+ * Memtable Key
+ *
+ * | <Internal Key Size> |      <Key>      | <SequenceNumber + ValueType> |   <Value Size>   |      <Value>      |
+ *       1 ~ 5 Bytes        Key Size Bytes              8 Bytes               1 ~ 5 Bytes       Value Size Bytes
+ *
+ * Internal Key
+ * |     <Key>      | <SequenceNumber + ValueType> |
+ *   Key Size Bytes              8 Bytes
+ *
+ * User Key
+ * |     <Key>      |
+ *   Key Size Bytes
+ *
+ *
+ * 我们在打开Db的时候Options里会带上一个Compactor, 这个Compactor可以用于我们自己的key(对应于上面的User Key), 这个Compactor我们
+ * 称为user_compactor由于我们的kv数据首先会插入到memtable中，所以leveldb首先会将kv进行编码(也就是上面的Memtable Key)成一个条目,
+ * 然后将这个字符串条目插入到memtable中, 我们知道Memtable实际上内部就是由跳表实现， 那这个跳表内部必然要知道如何比较两个Memtable
+ * Key的大小, 而提供这个功能的组件就是Memtabl内部的KeyComparator这个成员变量, 这个KeyComparator内部又有一个InternalKeyComparator,
+ * 而InternalKeyComparator内部才持有我们的user_compactor, 听起来好像比较复杂， 我们下面来看一下各个Compactor的作用以及对Key的处理
+ * 流程
+ *
+ * KeyComparator:
+ *   KeyComparator内部的operator()接口传入两个Memtable Key, 内部调用GetLengthPrefixedSlice()方法从两个Memtable Key中获取到两个
+ *   Internal Key, 由于KeyComparator内部持有了InterKeyComparator, 最后就会调用InterKeyComparator的compact方法来比较两个
+ *   Internal Key的大小.
+ *
+ * InternalKeyComparator:
+ *   InternalKeyComparator内部的Compare()接口传入两个Internal Key, 内部调用ExtractUserKey()方法从两个Internal Key中获取到两个
+ *   User Key(实际上就是从Internal Key中获取除去最后8个字节的前面部分就是User Key, 可以参照上图), 由于InternalKeyComparator内
+ *   部又持有一个user_compactor, 首先会调用user_compactor的compact方法来判断两个user_key的大小，如果两个user_key大小相等， 就
+ *   会获取Internal Key的最后8个Bytes(也就是SequnceNumber + ValueType), 来比较其大小， 并且返回结果
+ *
+ * UserComparator:
+ *   这个Comparaor实际上就是用比较User Key的，我们可以根据自己的Key的形式自己来指定这个Comparator, 如果没有指定， 默认是
+ *   BytewiseComparator(), 也就是按照字典序来进行排列
+ *
+ *
+ */
+
 }  // namespace leveldb
 
 #endif  // STORAGE_LEVELDB_DB_MEMTABLE_H_
