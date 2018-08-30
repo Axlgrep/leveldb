@@ -38,6 +38,8 @@ Status BuildTable(const std::string& dbname,
       Slice key = iter->key();
       meta->largest.DecodeFrom(key);
       // 这里的key实际上是带上了SequenceNumber和ValueType的
+      // key   : | <key> | <SequenceNumber + ValueType> |
+      // value : | <value> |
       builder->Add(key, iter->value());
     }
 

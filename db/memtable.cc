@@ -51,6 +51,25 @@ static const char* EncodeKey(std::string* scratch, const Slice& target) {
   return scratch->data();
 }
 
+// MemTableIterator实际上就是对跳表的Iterator做了一下封装
+// 其中大多数方法内部都是调用了跳表的Iterator对应的方法只
+// 有一下三个方法不一样:
+//
+// Seek():
+//   由于跳表内部node中字符串被编码成了Memtable Key(可以参照memtable.h
+//   尾部有注释), 而MemTableInerator的Seek方法传递
+//
+//  Key():
+//   从Memtable Key中取出user key + 后面的<SequenceNumber + ValueType>并且返回
+//
+//  value:
+//   从Memtable Key中取出user value并且返回
+//
+//
+//  MemTableIterator的Next()方法非常快，因为就是获取下一个结点的指针
+//  MemTableIterator的Prev()效率就比较低了，他内部调用FindLessThan(key)方法
+//  将当前node的key当做参数传入，然后在整个skiplist中查找第一个小于key的node
+
 class MemTableIterator: public Iterator {
  public:
   explicit MemTableIterator(MemTable::Table* table) : iter_(table) { }

@@ -278,6 +278,8 @@ void DBImpl::DeleteObsoleteFiles() {
   }
 }
 
+// 校验db目录下的文件是否完整，以及如果有.log文件的话，将其恢复到
+// memtable当中去
 Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
   mutex_.AssertHeld();
 
@@ -333,6 +335,10 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
   if (!s.ok()) {
     return s;
   }
+  // 在这里获取每个level的对应的sst文件的序号，然后
+  // 在和上面GetChildren获取的db目录下面的所有文件
+  // 做匹配，如果expected中期望的某个文件在db目录下
+  // 找不到，那么Recover会失败...
   std::set<uint64_t> expected;
   versions_->AddLiveFiles(&expected);
   uint64_t number;
@@ -374,6 +380,13 @@ Status DBImpl::Recover(VersionEdit* edit, bool *save_manifest) {
   return Status::OK();
 }
 
+// 在leveldb内部如果写入或者删除数据首先是将这个操作记录在log文件当中，
+// 然后再将其写入memtable, 如果在关闭db之前memtable的数据还没有compact到
+// sst/ldb文件中去，那么这部分数据会丢失。
+// 正是应为如此，所以我们再打开db之前首先要看一下目录下是否有.log文件
+// 如果有的话要将这个文件里面记录的内容恢复到memtable当中去, 如果有时候打开
+// leveldb/rocksdb速度比较慢的话， 大多数是因为正在将.log文件中的数据恢复到
+// memtable当中导致的
 Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
                               bool* save_manifest, VersionEdit* edit,
                               SequenceNumber* max_sequence) {
@@ -532,6 +545,9 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     if (base != NULL) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
+    // 通过PickLevelFromMemTableOutput方法我们可以确定将当前新生成的sst文件
+    // 应该插入到哪一个level当中，这时候我们将level信息以及该文件的一些meta
+    // 信息记录到edit当中, 方便后续同步到version set当中
     edit->AddFile(level, meta.number, meta.file_size,
                   meta.smallest, meta.largest);
   }
@@ -581,6 +597,7 @@ void DBImpl::CompactRange(const Slice* begin, const Slice* end) {
   {
     MutexLock l(&mutex_);
     Version* base = versions_->current();
+    // 从上往下找到最大的和[begin, end]有overlap的level
     for (int level = 1; level < config::kNumLevels; level++) {
       if (base->OverlapInLevel(level, begin, end)) {
         max_level_with_files = level;
@@ -614,6 +631,7 @@ void DBImpl::TEST_CompactRange(int level, const Slice* begin,const Slice* end) {
     end_storage = InternalKey(*end, 0, static_cast<ValueType>(0));
     manual.end = &end_storage;
   }
+
 
   MutexLock l(&mutex_);
   while (!manual.done && !shutting_down_.Acquire_Load() && bg_error_.ok()) {
@@ -1371,6 +1389,9 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // individual write by 1ms to reduce latency variance.  Also,
       // this delay hands over some CPU to the compaction thread in
       // case it is sharing the same core as the writer.
+      // 如果当前level0层的sst文件已经到达了'软上限'，这时候我们要'缓写'
+      // 所谓的缓写就是sleep 1ms之后再写入，第一次allow_delay是true, sleep
+      // 之后将allow_delay赋值为false, 下次就不sleep了
       mutex_.Unlock();
       env_->SleepForMicroseconds(1000);
       allow_delay = false;  // Do not delay a single write more than once
@@ -1378,20 +1399,26 @@ Status DBImpl::MakeRoomForWrite(bool force) {
     } else if (!force &&
                (mem_->ApproximateMemoryUsage() <= options_.write_buffer_size)) {
       // There is room in current memtable
+      // 如果当前是写入操作， 并且memtable的内存使用量小于write_buffer_size
+      // 直接break
       break;
     } else if (imm_ != NULL) {
       // We have filled up the current memtable, but the previous
       // one is still being compacted, so we wait.
+      // 如果我们的memetable大小已经达到了write_buffer_size，但是immutable memtable
+      // 目前不为空，表示可能在执行compact，这时候我们wait等待
       Log(options_.info_log, "Current memtable full; waiting...\n");
       bg_cv_.Wait();
     } else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
       // There are too many level-0 files.
+      // 如果我们的level 0层的sst文件已经到达了硬上限，这时候我们执行阻写操作
       Log(options_.info_log, "Too many L0 files; waiting...\n");
       bg_cv_.Wait();
     } else {
       // Attempt to switch to a new memtable and trigger compaction of old
       assert(versions_->PrevLogNumber() == 0);
-      // 执行compaction之后会生成新的log文件
+      // 在执行compact之前先生成一个新的log文件, 如果还没有执行compact成功
+      // 就把db关闭，那么下次启动db的时候，可以从旧的log文件中恢复数据
       uint64_t new_log_number = versions_->NewFileNumber();
       WritableFile* lfile = NULL;
       s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);

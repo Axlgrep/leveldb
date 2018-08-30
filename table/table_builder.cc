@@ -56,6 +56,9 @@ struct TableBuilder::Rep {
         filter_block(opt.filter_policy == NULL ? NULL
                      : new FilterBlockBuilder(opt.filter_policy)),
         pending_index_entry(false) {
+    // 因为在index_block中我们每个block的索引key差别比较大，
+    // 所以我在这里将重启点的周期设置为1，也就是说不采用shard, no-shard那
+    // 一套东西
     index_block_options.block_restart_interval = 1;
   }
 };
@@ -143,6 +146,7 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
     // 计算出大于或者等于当前Block中最大Key的那个Key(我们称为索引Key)
+    // 但是计算出来的这个key要比下一个Block中最小的Key要小
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
     // 记录当前Raw Block在文件中的位置距离文件起始位置的偏移量
@@ -327,7 +331,7 @@ Status TableBuilder::status() const {
 
 Status TableBuilder::Finish() {
   Rep* r = rep_;
-  Flush();
+  Flush();      //把最后一个Data Block Flush到文件上
   assert(!r->closed);
   r->closed = true;
 

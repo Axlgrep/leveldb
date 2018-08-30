@@ -349,6 +349,8 @@ Cache::Handle* LRUCache::Insert(
     void (*deleter)(const Slice& key, void* value)) {
   MutexLock l(&mutex_);
 
+  // 因为LRUHandle中的key_data默认是一个Bytes，
+  // 为了存下key, 还需要多分配(key.size() - 1)个Bytes
   LRUHandle* e = reinterpret_cast<LRUHandle*>(
       malloc(sizeof(LRUHandle)-1 + key.size()));
   e->value = value;

@@ -118,6 +118,22 @@ static bool BeforeFile(const Comparator* ucmp,
           ucmp->Compare(*user_key, f->smallest.user_key()) < 0);
 }
 
+// 如果是第Level 0层那么disjoint_sorted_files值为false
+// 如果是非第Level 0层那么disjoint_sorted_file值为true
+//
+// Q:为什么需要disjoint_sorted_files这个变量值将level 0层
+// 和其他层分开判断?;
+//
+// A: Level 0层中的sst文件由Memtable直接compact生成, 该层
+// 的不同sst文件之间可能本身就有重叠部分，而其他层和Level
+// 0层不同，sst文件之间并没有重叠部分，所以在判断某一层
+// 与我们给定的区间是否重叠时候，我们需要遍历Level 0层的
+// 所有文件分别进行判断该sst文件是否与我们给定的区间有重叠
+// 而在判断其他层的时候我们无需遍历所有sst文件，只需要使用
+// 二分查找，找到第一个比右区间比我们给定的左区间大的sst文
+// 件(如果该Level没有符合条件的文件，那么就没有重叠), 然后
+// 判断我们的右区间是否比该文件小(是的话表示没有重叠，否则
+// 有重叠)
 bool SomeFileOverlapsRange(
     const InternalKeyComparator& icmp,
     bool disjoint_sorted_files,
@@ -125,10 +141,14 @@ bool SomeFileOverlapsRange(
     const Slice* smallest_user_key,
     const Slice* largest_user_key) {
   const Comparator* ucmp = icmp.user_comparator();
+  // Level 0层走这个判断逻辑
   if (!disjoint_sorted_files) {
     // Need to check against all files
     for (size_t i = 0; i < files.size(); i++) {
       const FileMetaData* f = files[i];
+      // 一个文件中最大key的值要小于smallest_user_key
+      // 或者一个文件中最小key的值要大于largest_user_key
+      // 这时候认为不想交
       if (AfterFile(ucmp, smallest_user_key, f) ||
           BeforeFile(ucmp, largest_user_key, f)) {
         // No overlap
@@ -139,6 +159,7 @@ bool SomeFileOverlapsRange(
     return false;
   }
 
+  // 非Level 0层走这个判断逻辑
   // Binary search over file list
   uint32_t index = 0;
   if (smallest_user_key != NULL) {
@@ -503,6 +524,9 @@ int Version::PickLevelForMemTableOutput(
     const Slice& smallest_user_key,
     const Slice& largest_user_key) {
   int level = 0;
+  // 如果在第level 0层没有文件和[smallest_user_key, largest_user_key]区间重合
+  // 那么我们才走里面的逻辑，继续向下判断，如果level 0层就发生了重叠的情况, 那
+  // 么就直接放到level 0层， 因为level 0层本来就不保证文件和文件之间没有Overlap
   if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) {
     // Push to next level if there is no overlap in next level,
     // and the #bytes overlapping in the level after that are limited.
@@ -510,6 +534,8 @@ int Version::PickLevelForMemTableOutput(
     InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
     std::vector<FileMetaData*> overlaps;
     while (level < config::kMaxMemCompactLevel) {
+      // 如果当前的[smallest_user_key, largest_user_key]区间在第level + 1层有文件
+      // 与其重叠，那么我们直接break, 表示就将其放入第level层
       if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) {
         break;
       }
@@ -555,6 +581,18 @@ void Version::GetOverlappingInputs(
     } else {
       inputs->push_back(f);
       if (level == 0) {
+        // 由于level 0层的文件和文件之间本来就有互相重叠的可能性，所以在这里我们
+        // 要进行特殊的判断, 过了上面的if和else if判断，能确定当前的[user_begin, user_end]
+        // 和索引为i的文件是有重叠的，所以我们对[user_begin, user_end]进行扩张，
+        // 可以看下面的例子，如果当前遍历的文件是f1, [user_begin, user_end]是u
+        // 那么经过扩张之后区间从u变成了new u, 然后重新开始遍历，其他文件如果和
+        // new u有重叠关系，那么就将其加入inputs集合(如果其他文件的左区间或者
+        // 右区间比new u更大，那么我们就扩张new u，然后重新开始遍历)
+        // eg..
+        //   |---f1---|
+        //       |---u---|
+        //   |---new u---|
+        //
         // Level-0 files may overlap each other.  So check if the newly
         // added file has expanded the range.  If so, restart search.
         if (begin != NULL && user_cmp->Compare(file_start, user_begin) < 0) {
@@ -719,6 +757,24 @@ class VersionSet::Builder {
       std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
       const FileSet* added = levels_[level].added_files;
       v->files_[level].reserve(base_files.size() + added->size());
+      // added是一个set集合，里面记录的是新添加文件的meta信息，是有序排列的(首先
+      // 按照文件的smallest排序，smallest相同就按照filenumber排序, 下面的逻辑是
+      // 想added里面的文件和原先version里面的文件合并起来存放到一个新的version里面
+      //
+      // eg...
+      //   added [3, 6, 9]
+      //   base  [1, 2, 4, 7, 11, 12, 13]
+      //
+      //   第一遍外层循环的时候added_iter指向added里面的3，bpos指向base里面的4
+      //   走完之后v[level] = [1, 2, 3],              base_iter指向base里面的4
+      //   第二遍外层循环的时候added_iter指向added里面的6，bpos指向base里面的7
+      //   走完之后v[level] = [1, 2, 3, 4, 6],        base_iter指向base里面的7
+      //   第三遍外层循环的时候added_iter指向added里面的9，bpos指向base里面的11
+      //   走完之后v[level] = [1, 2, 3, 4, 6, 7, 9]   base_iter指向base里面的11
+      //
+      //   然后走到下面的'Add remaining base files'
+      //   实际上就是将base_iter指向的元素到末尾元素添加到v[level]里面
+      //   走完之后v[level] = [1, 2, 3, 4, 6, 7, 9, 11, 12, 13]
       for (FileSet::const_iterator added_iter = added->begin();
            added_iter != added->end();
            ++added_iter) {
@@ -800,6 +856,8 @@ VersionSet::~VersionSet() {
   delete descriptor_file_;
 }
 
+// 这里实际上是将Version添加到一个环形双向链表里面去
+// 其中dummy_versions_是这个环形双向链表的头
 void VersionSet::AppendVersion(Version* v) {
   // Make "v" current
   assert(v->refs_ == 0);
@@ -949,6 +1007,13 @@ Status VersionSet::Recover(bool *save_manifest) {
     log::Reader reader(file, &reporter, true/*checksum*/, 0/*initial_offset*/);
     Slice record;
     std::string scratch;
+    // 之所以这里要传入scratch是考虑到以下两种情况
+    // 1. 如果当前的record就完整的存在buffer_里面并且是kFullType类型，这时候我们
+    // 的scratch就用不上, 我们把buffer_当做载体，record就直接指向它.
+    // 2. 如果我们的record是分了多个fragment进行存放，这时候可能会跨越不同的block,
+    // 而每当获取到一个新的block, 我们就会将原先指向前一个block的buffer_重新指向新
+    // 的block, 这时候为了保证之前获取到的fragment的数据不丢失，我们就将其存储在
+    // sctatch里面
     while (reader.ReadRecord(&record, &scratch) && s.ok()) {
       VersionEdit edit;
       s = edit.DecodeFrom(record);
@@ -1073,6 +1138,8 @@ void VersionSet::Finalize(Version* v) {
   int best_level = -1;
   double best_score = -1;
 
+  // 根据规则计算出每一层的score, 选择出score最大的那一层
+  // 在version里面记录compaction_level_和compaction_score_
   for (int level = 0; level < config::kNumLevels-1; level++) {
     double score;
     if (level == 0) {
@@ -1087,10 +1154,12 @@ void VersionSet::Finalize(Version* v) {
       // file size is small (perhaps because of a small write-buffer
       // setting, or very high compression ratios, or lots of
       // overwrites/deletions).
+      // 在level 0层是按照文件的数量来计算score
       score = v->files_[level].size() /
           static_cast<double>(config::kL0_CompactionTrigger);
     } else {
       // Compute the ratio of current size to size limit.
+      // 在其他level 是根据该层文件的总大小来计算score
       const uint64_t level_bytes = TotalFileSize(v->files_[level]);
       score =
           static_cast<double>(level_bytes) / MaxBytesForLevel(options_, level);

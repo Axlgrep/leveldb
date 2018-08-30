@@ -15,6 +15,31 @@
 
 namespace leveldb {
 
+/*
+ *
+ *
+ *                       |---------------------|
+ *                       |       Entry 0       |
+ *                       |---------------------|
+ *                       |       Entry 1       |
+ *                       |---------------------|
+ *                       |       Entry 2       |
+ *                       |---------------------|
+ *                       |         ...         |
+ * restart_offset_ ----> |---------------------|
+ *                       |     restarts[0]     |  4Bytes
+ *                       |---------------------|
+ *                       |     restarts[1]     |  4Bytes
+ *                       |---------------------|
+ *                       |        ...          |
+ *                       |---------------------|
+ *                       |   restarts.size()   |  4Bytes
+ *                       |---------------------|
+ *
+ *
+ */
+
+
 inline uint32_t Block::NumRestarts() const {
   assert(size_ >= sizeof(uint32_t));
   return DecodeFixed32(data_ + size_ - sizeof(uint32_t));

@@ -299,7 +299,7 @@ class VersionSet {
   const Options* const options_;
   TableCache* const table_cache_;
   const InternalKeyComparator icmp_;
-  uint64_t next_file_number_;
+  uint64_t next_file_number_;       //下一个log文件序列号，对应于rocksdb里面的write2file
   uint64_t manifest_file_number_;
   uint64_t last_sequence_;
   uint64_t log_number_;

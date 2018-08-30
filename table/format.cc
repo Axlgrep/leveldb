@@ -107,6 +107,12 @@ Status ReadBlock(RandomAccessFile* file,
 
   // Read the block contents as well as the type/crc footer.
   // See table_builder.cc for the code that built this structure.
+  // BlockHandle只会记录每个Block自身的大小，后面的1 Bytes的压缩类型
+  // 和4 Bytes CRC 并不会记录在内
+  //
+  // |    <Block>    |   <Type>   |   <CRC>   |
+  //   handle.size()    1 Bytes      4 Bytes
+
   size_t n = static_cast<size_t>(handle.size());
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;

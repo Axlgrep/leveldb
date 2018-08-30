@@ -239,6 +239,7 @@ inline void SkipList<Key,Comparator>::Iterator::Prev() {
   }
 }
 
+// Seek实际上就是找到跳表中第一个值大于等于target的node
 template<typename Key, class Comparator>
 inline void SkipList<Key,Comparator>::Iterator::Seek(const Key& target) {
   node_ = list_->FindGreaterOrEqual(target, NULL);
