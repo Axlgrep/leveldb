@@ -357,21 +357,20 @@ SkipList<Key,Comparator>::SkipList(Comparator cmp, Arena* arena)
   }
 }
 
-/* head_    "a"     "b"     "c"     "e"     "f"
- *  __       _       _       _       _       _
- * | 0| --> |0| --> |0| --> |0| --> |0| --> |0| --> NULL
- * | 1| --------/   |1|---------/   |1| ----------> NULL
- * | 2| -----------------------/    |2| ----------> NULL
- * | 3|
- * | 4|
- * | 5|
- * | 6|
- * | 7|
- * | 8|
- * | 9|
- * |10|
+/*  ——
  * |11|
- *  ——
+ * |10|
+ * | 9|
+ * | 8|
+ * | 7|
+ * | 6|
+ * | 5|
+ * | 4|
+ * | 3|
+ * | 2| ---------------------\   |2| --------> NULL
+ * | 1| --------\  |1|--------\  |1| --------> NULL
+ *  --       -      -      -      -      -
+ * head_ -> "a" -> "b" -> "c" -> "e" -> "f" -> NULL
  *
  *  leveldb中的skiplist最高层数为12(kMaxHeight为12), 上图所示的
  *  skiplist的高度为3(因为除head_以外最高的节点"d"高度为3), 我们
@@ -418,6 +417,8 @@ void SkipList<Key,Comparator>::Insert(const Key& key) {
   // TODO(opt): We can use a barrier-free variant of FindGreaterOrEqual()
   // here since Insert() is externally synchronized.
   Node* prev[kMaxHeight];
+  // x指向当前插入节点的后一个节点的地址，
+  // 如果当前插入节点插入后已经是跳表最后一个节点，则x值为NULL
   Node* x = FindGreaterOrEqual(key, prev);
 
   // Our data structure does not allow duplicate insertion

@@ -169,6 +169,10 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   r->num_entries++;
   r->data_block.Add(key, value);
 
+
+  // 每个Block中存储了多条record, 以及重启点数组, 还有重启点数组
+  // 的大小(uint32_t), 在option中我们配置block_size, 实际上在文件
+  // 当中每个block的大小并不是一定是我们的block_size.
   const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
   if (estimated_block_size >= r->options.block_size) {
     Flush();

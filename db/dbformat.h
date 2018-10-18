@@ -173,6 +173,8 @@ inline int InternalKeyComparator::Compare(
   return Compare(a.Encode(), b.Encode());
 }
 
+// 当前iter指向的key()进行解析, 获取到userkey, sequence以及
+// type, 将其存入到ParsedInternalKey当中去
 inline bool ParseInternalKey(const Slice& internal_key,
                              ParsedInternalKey* result) {
   const size_t n = internal_key.size();

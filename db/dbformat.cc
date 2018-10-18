@@ -47,6 +47,11 @@ const char* InternalKeyComparator::Name() const {
   return "leveldb.InternalKeyComparator";
 }
 
+// 不同的UserKey, 字典序小的在前面
+// 相同的UserKey, sequence number大的在前面
+// 由于不同的record, sequence number肯定不一样, 所以虽然逻辑是
+// type大的在前面(kTypeDeletion = 0x0, kTypeValue = 0x1),但是并
+// 不会比较到这一层
 int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
   // Order by:
   //    increasing user key (according to user-supplied comparator)
@@ -65,6 +70,8 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
   return r;
 }
 
+// start <= target < limit
+// (start肯定是小于limit的)
 void InternalKeyComparator::FindShortestSeparator(
       std::string* start,
       const Slice& limit) const {
@@ -84,6 +91,7 @@ void InternalKeyComparator::FindShortestSeparator(
   }
 }
 
+// key <= target
 void InternalKeyComparator::FindShortSuccessor(std::string* key) const {
   Slice user_key = ExtractUserKey(*key);
   std::string tmp(user_key.data(), user_key.size());

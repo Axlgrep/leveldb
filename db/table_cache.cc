@@ -73,6 +73,10 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       TableAndFile* tf = new TableAndFile;
       tf->file = file;
       tf->table = table;
+      // key: 有sst文件的序列号编码而来
+      // tf: 包含有RandomAccessFile和Table的结构体
+      // file: 对应的sst文件
+      // table: 持有对应sst文件的一些信息，包括这个文件的索引block等等
       *handle = cache_->Insert(key, tf, 1, &DeleteEntry);
     }
   }

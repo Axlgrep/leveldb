@@ -39,11 +39,11 @@ const int kNumNonTableCacheFiles = 10;
 
 // Information kept for every waiting writer
 struct DBImpl::Writer {
-  Status status;
-  WriteBatch* batch;
-  bool sync;
-  bool done;
-  port::CondVar cv;
+  Status status;      // 本次写入的结果
+  WriteBatch* batch;  // 本次写入对应的WriteBatch
+  bool sync;          // 本次写入数据对应的log是否立即刷盘
+  bool done;          // 本次写入数据是否已经完成
+  port::CondVar cv;   // 条件变量, 如果在此之前有其他Write正在写入，则等待
 
   explicit Writer(port::Mutex* mu) : cv(mu) { }
 };
@@ -1099,9 +1099,21 @@ Iterator* DBImpl::NewInternalIterator(const ReadOptions& options,
                                       uint32_t* seed) {
   IterState* cleanup = new IterState;
   mutex_.Lock();
+  // 创建迭代器的时候会获取到LastSequence,
+  // 然后在迭代的过程中会对遍历的record进行解析,
+  // 其sequenceNumber小于LastSequence的才进行读取,
+  // 大于LastSequence的record是创建迭代器之后新插入的
+  // 数据, 我们直接忽略掉就可以了
   *latest_snapshot = versions_->LastSequence();
 
   // Collect together all needed child iterators
+  // 可以看到当我们外部创建了一个Iterator的时候
+  // 实际上这个对象内部维护了一个iterator的集合
+  // 首先是memtable的Iterator
+  // 然后是Immutable memtable的Iterator
+  // Level 0层由于有overlap所以需要为该层的每个sst文件都添加
+  // 一个Iterator,
+  // 其他Level每层各一个Iterator
   std::vector<Iterator*> list;
   list.push_back(mem_->NewIterator());
   mem_->Ref();
@@ -1189,7 +1201,15 @@ Status DBImpl::Get(const ReadOptions& options,
 Iterator* DBImpl::NewIterator(const ReadOptions& options) {
   SequenceNumber latest_snapshot;
   uint32_t seed;
+  // 在外部调用NewIterator创建一个迭代器之前，内部首先会创建一个
+  // MergingIterator(内部维护一个迭代器集合, 指向memtable的，指向
+  // immutable memtable的，还有指向level0层各个sst文件的，还有指向
+  // 其他level的...), 然后外层还有一个DBIter持有了Mergingiterator
   Iterator* iter = NewInternalIterator(options, &latest_snapshot, &seed);
+  // 在这里可以看到，实际上我们创建迭代器的时候可以传入一个snapshot, 这个
+  // snapshot的本质就是一个sequence_number, 如果我们没有传入snapshot, 在
+  // 构造这个迭代器的时候会从调用versions_->LastSequence(), 来获取最大的
+  // Sequence
   return NewDBIterator(
       this, user_comparator(), iter,
       (options.snapshot != NULL
@@ -1230,27 +1250,35 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
   w.sync = options.sync;
   w.done = false;
 
+  // 在这里首先会抢占锁，所以在很多线程进行写入的时候这里会进行互斥，
+  // 保证每个Writer能够安全的放入writers_队列当中
   MutexLock l(&mutex_);
   writers_.push_back(&w);
-  //当前这个Writer并没有完成并且当前这个Writer并不是writers_
-  //队列的第一个(这说明之前还有Writer需要比它先完成)，则等待
+  // 当前这个Writer并没有完成并且当前这个Writer并不是writers_
+  // 队列的第一个(这说明之前还有Writer需要比它先完成)，则等待
   while (!w.done && &w != writers_.front()) {
     w.cv.Wait();
   }
+  // 被唤醒之后发现自己已经被前面的WriteBatch打包一起完成了，
+  // 则直接返回结果
   if (w.done) {
     return w.status;
   }
 
   // May temporarily unlock and wait.
+  // 在执行写入之前先检查一下Memtable, 是否还有空间
   Status status = MakeRoomForWrite(my_batch == NULL);
   uint64_t last_sequence = versions_->LastSequence();
   Writer* last_writer = &w;
   if (status.ok() && my_batch != NULL) {  // NULL batch is for compactions
-    // 执行完BuildBatchGroup之后db_impl的成员变量tmp_batch_中存储writer_数组
-    // 中已经被合并的WriteBatch，而last_writer指向writer_数组中最后一个被合并
+    // 执行完BuildBatchGroup之后db_impl的成员变量tmp_batch_中存储writer_集合
+    // 中已经被合并的WriteBatch，而last_writer指向writer_集合中最后一个被合并
     // 的WriteBatch
     WriteBatch* updates = BuildBatchGroup(&last_writer);
+    // 为当前已经做了合并操作的WriteBatch设置sequence, 这个sequence
+    // 对应于这个WriteBatch中第一个操作的序列号
     WriteBatchInternal::SetSequence(updates, last_sequence + 1);
+    // 更新last_sequence, 当前合并的WriteBatch中有多少个操作则加上多少
     last_sequence += WriteBatchInternal::Count(updates);
 
     // Add to log and apply to memtable.  We can release the lock
@@ -1267,6 +1295,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
           sync_error = true;
         }
       }
+      // 写log成功之后将整个WriteBatch中的所有操作依次插入到memtable当中
       if (status.ok()) {
         status = WriteBatchInternal::InsertInto(updates, mem_);
       }
@@ -1290,7 +1319,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* my_batch) {
   // 当当前队头Writer完成自身并且顺带完成了后续的几个Writer之后
   // 需要更新状态，
   // 如上图所示， 当前writer1完成时顺带将writer2, writer3完成, 这时候
-  // writer2, writer3可能在其他线程里由于不是对头元素而被wait()住了，
+  // writer2, writer3可能在其他线程里由于不是队头元素而被wait()住了，
   // 这时候我们需要将其status和done进行赋值并且pop掉，并且调用条件变
   // 量的Signal将其唤醒(第1219行), 唤醒之后发现其done成员变量为ture了
   // 这时候就会返回其对应的status了;
@@ -1390,7 +1419,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // this delay hands over some CPU to the compaction thread in
       // case it is sharing the same core as the writer.
       // 如果当前level0层的sst文件已经到达了'软上限'，这时候我们要'缓写'
-      // 所谓的缓写就是sleep 1ms之后再写入，第一次allow_delay是true, sleep
+      // 所谓的缓写就是sleep 1s之后再写入，第一次allow_delay是true, sleep
       // 之后将allow_delay赋值为false, 下次就不sleep了
       mutex_.Unlock();
       env_->SleepForMicroseconds(1000);

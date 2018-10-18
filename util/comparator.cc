@@ -43,9 +43,9 @@ class BytewiseComparatorImpl : public Comparator {
    *    cur_max_key = abcdef
    *    next_min_key = abf
    *    那么利用FindShortestSeparator计算出来的index_key = abd
-   *    那么利用FindShortSuccessor计算出来的index_key = abcdeg
+   *    那么利用FindShortSuccessor计算出来的index_key = abd
    *    abcdef <= abd < abf        符合要求
-   *    abcdef <= abcdeg < abf     符合要求
+   *    abcdef <= abd < abf        符合要求
    * e.g..
    *    cur_max_key = abc
    *    next_min_key = abcdef

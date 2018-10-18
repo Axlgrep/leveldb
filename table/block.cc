@@ -127,7 +127,7 @@ class Block::Iter : public Iterator {
   }
 
   // restarts_指向的是该Block中重启点数组的起始位置
-  // 通道index偏移量我们就能获取数组中对应位置的数据了
+  // 通过index偏移量我们就能获取数组中对应位置的数据了
   uint32_t GetRestartPoint(uint32_t index) {
     assert(index < num_restarts_);
     return DecodeFixed32(data_ + restarts_ + index * sizeof(uint32_t));
@@ -139,6 +139,10 @@ class Block::Iter : public Iterator {
     // current_ will be fixed by ParseNextKey();
 
     // ParseNextKey() starts at the end of value_, so set value_ accordingly
+    // 找到当前Block记录重启点的数组中第index个元素, 从中解析出其指向的实际
+    // 数据距离当前Block起始位置的偏移量, 然后让value_记录这个位置(由于我们
+    // 找下一条记录的时候是根据value_所指向的位置加上value_的大小来查找的,
+    // 所以这时候我们将value_的大小设置为0)
     uint32_t offset = GetRestartPoint(index);
     value_ = Slice(data_ + offset, 0);
   }
@@ -234,11 +238,31 @@ class Block::Iter : public Iterator {
     }
   }
 
+  /*
+   * after SeekToFirst() :
+   *
+   * |--value_.size()--|
+   * -----------------------------------------------------------
+   * |      entry      |    ......   | 0 | 1 | 2 | 3 | size(4) |
+   * -----------------------------------------------------------
+   * ^                               ^
+   * value_.data()/current_      restarts
+   */
   virtual void SeekToFirst() {
     SeekToRestartPoint(0);
     ParseNextKey();
   }
 
+  /*
+   * after SeekToLast() :
+   *
+   *               |--value_.size()--|
+   * -----------------------------------------------------------
+   * |   .......   |      entry      | 0 | 1 | 2 | 3 | size(4) |
+   * -----------------------------------------------------------
+   *               ^                 ^
+   *  value_.data()/current_      restarts
+   */
   virtual void SeekToLast() {
     SeekToRestartPoint(num_restarts_ - 1);
     while (ParseNextKey() && NextEntryOffset() < restarts_) {

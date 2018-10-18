@@ -125,6 +125,8 @@ void BlockBuilder::Add(const Slice& key, const Slice& value) {
   assert(buffer_.empty() // No values yet?
          || options_->comparator->Compare(key, last_key_piece) > 0);
   size_t shared = 0;
+  // 如果当前的counter_已经到达了block_restart_interval上限的时候, 那么
+  // shared就为0, 下一条recored不再共享前缀
   if (counter_ < options_->block_restart_interval) {
     // See how much sharing to do with previous string
     const size_t min_length = std::min(last_key_piece.size(), key.size());

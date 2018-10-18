@@ -11,6 +11,8 @@
 namespace leveldb {
 
 namespace {
+// Mergingiterator中包含了指向memtable/immutable memtable的迭代器(db/skiplist.h)
+// 以及指向Level0层各个sst文件的迭代器(table/block.cc)
 class MergingIterator : public Iterator {
  public:
   MergingIterator(const Comparator* comparator, Iterator** children, int n)
@@ -32,6 +34,10 @@ class MergingIterator : public Iterator {
     return (current_ != NULL);
   }
 
+  // 让Memtable和Immutable Memtable, 还有指向sst
+  // 文件的Iterator都SeekToFirst, 然后选出这些
+  // Iterator中指向key最小的那个作为当前的基准
+  // Iterator
   virtual void SeekToFirst() {
     for (int i = 0; i < n_; i++) {
       children_[i].SeekToFirst();
@@ -152,6 +158,8 @@ class MergingIterator : public Iterator {
   Direction direction_;
 };
 
+// 遍历所有的Iterator, 然后找到当前指向Key最小的
+// 那个, 用current_指向这个Iterator
 void MergingIterator::FindSmallest() {
   IteratorWrapper* smallest = NULL;
   for (int i = 0; i < n_; i++) {
@@ -183,6 +191,10 @@ void MergingIterator::FindLargest() {
 }
 }  // namespace
 
+// 如果当前传入的Iterator集合大小为0，则返回一个空的Iterator
+// 如果当前传入的Iterator集合大小为1，则直接返回Memtable生成的那个Iterator
+// 如果当前传入的Iterator集合大小大于1，则将这些Iterator进行包装，返回一个
+// MerginIterator;
 Iterator* NewMergingIterator(const Comparator* cmp, Iterator** list, int n) {
   assert(n >= 0);
   if (n == 0) {

@@ -141,6 +141,12 @@ Status ReadBlock(RandomAccessFile* file,
 
   switch (data[n]) {
     case kNoCompression:
+      // 如果读取数据的长度小于RandomAccessFile中一个Block的大小，
+      // 那么contents直接指向RandomAccess文件中的block引用。
+      // 如果读取的数据长度大于RandomAccessFile中一个Block的大小，
+      // 那么就需要将多个Block中的数据拷贝到我们自己创建的buffer空间
+      // 当中，而这部分空间是在heap上进行分配的，后续我们需要手动
+      // 释放，所以在下面会做标记
       if (data != buf) {
         // File implementation gave us pointer to some other data.
         // Use it directly under the assumption that it will be live
@@ -158,6 +164,8 @@ Status ReadBlock(RandomAccessFile* file,
       // Ok
       break;
     case kSnappyCompression: {
+      // 如果采用Snappy形式进行压缩，首先先获取数据压缩之前的实际长度
+      // 是多少，然后分配对应的空间存储解压之后的数据
       size_t ulength = 0;
       if (!port::Snappy_GetUncompressedLength(data, n, &ulength)) {
         delete[] buf;

@@ -176,10 +176,49 @@ void MemTable::Add(SequenceNumber s, ValueType type,
   table_.Insert(buf);
 }
 
+/*
+ *  eg1..
+ *  SET b v1;
+ *  SET b v2;
+ *  GET b (snapshot = NULL) : Status = ok(), key = b, value = v2;
+ *  head_ -> (set a v) -> (set b v2) -> (set b v1) -> (set c v) -> NULL
+ *            seq = 1      seq = 4        seq = 3      seq = 2
+ *                            ^
+ *                           iter
+ *
+ *  eg2..
+ *  SET b v;
+ *  DELETE b;
+ *  GET b (snapshot = NULL) : Status = NotFound();
+ *  head_ -> (set a v) -> (delete  b) -> (set b v) -> (set c v) -> NULL
+ *            seq = 1       seq = 4       seq = 3      seq = 2
+ *                             ^
+ *                            iter
+ *  eg3..
+ *  SET b v1;
+ *  DELETE b;
+ *  SET b v2;
+ *  Get b (snapshot = NULL) : Status = ok(), key = b, value = v2;
+ *  head_ ->  (set a v) -> (set b v2) -> (delete  b) -> (set b v1) -> (set c v) -> NULL
+ *             seq = 1       seq = 5       seq = 4       seq = 3       seq = 2
+ *                              ^
+ *                             iter
+ *
+ *  eg4..
+ *  SET b v1;
+ *  DELETE b;
+ *  SET b v2;
+ *  Get b (snapshot.number = 4) : Status = NotFound();
+ *  head_ ->  (set a v) -> (set b v2) -> (delete  b) -> (set b v1) -> (set c v) -> NULL
+ *             seq = 1       seq = 5       seq = 4       seq = 3       seq = 2
+ *                                            ^
+ *                                           iter
+ */
 bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
   Slice memkey = key.memtable_key();
   // 这个Iterator的实现在skiplist.h里面
   Table::Iterator iter(&table_);
+  // 在SkipList中找到第一个值大于等于memkey的结点
   iter.Seek(memkey.data());
   if (iter.Valid()) {
     // entry format is:
@@ -193,9 +232,11 @@ bool MemTable::Get(const LookupKey& key, std::string* value, Status* s) {
     // all entries with overly large sequence numbers.
     const char* entry = iter.key();
     uint32_t key_length;
-    // 这里是解析key的长度，然后取出key来和传入的key进行对比
-    // 如果key是一样的则取出类型来进行比较，是kTypeValue
-    // 还是kTypeDeletion
+    // 在这里判断iter指向结点的user_key是否和传入的相同，如果相同才有必要
+    // 进行判断, 判断当前结点操作的类型，如果是kTypeValue, 则解析出对应的
+    // value进行返回，如果是kTypeDeletion则直接返回NotFound(), 需要注意的
+    // 是当前iter指向的结点肯定是对应user_key最新的操作结点，具体原因可以
+    // 查看LevelDB的三种比较器
     const char* key_ptr = GetVarint32Ptr(entry, entry+5, &key_length);
     if (comparator_.comparator.user_comparator()->Compare(
             Slice(key_ptr, key_length - 8),

@@ -63,6 +63,7 @@ class DBIter: public Iterator {
     delete iter_;
   }
   virtual bool Valid() const { return valid_; }
+  // 从InternalKey中获取出user_key进行返回
   virtual Slice key() const {
     assert(valid_);
     return (direction_ == kForward) ? ExtractUserKey(iter_->key()) : saved_key_;
@@ -163,6 +164,11 @@ void DBIter::Next() {
     }
     // saved_key_ already contains the key to skip past.
   } else {
+    // 在调用迭代器的Next()的时候, 首先会记录一下当前的迭代器
+    // 指向的user_key, 并且将其保存到saved_key_这个变量当中去
+    // 接着调用下面的FindNextUserEntry的时候就会跳过和saved_key_
+    // 相同的key, 因为最新的数据我们已经遍历到了(user_key相同
+    // sequence number大的表示最新的数据)
     // Store in saved_key_ the current key so we skip it below.
     SaveKey(ExtractUserKey(iter_->key()), &saved_key_);
   }
@@ -170,12 +176,36 @@ void DBIter::Next() {
   FindNextUserEntry(true, &saved_key_);
 }
 
+/*
+ * skip可以理解为我们已经获取了这个key了, 接下来如果还遍历到了这
+ * 个key, 我们可以直接忽略掉, 因为之前获取的肯定sequence number
+ * 要大, 也就是数据越新
+ *
+ * eg1..
+ *   (D a) 18 -> (S a b) 14 -> NULL
+ *   (S a c) 10 -> (S a f) 8 -> (S b d) 4 -> NULL
+ *
+ * 调用SeekToFirst之后迭代器会指向(S b d) 4
+ *
+ *
+ * eg2..
+ *   (S a b) 18 -> (S a c) 14 -> NULL
+ *   (S a c) 10 -> (S b c) 8 -> (S b d) 4 -> NULL
+ *
+ * 调用SeekToFirst之后迭代器会指向(S a b) 18
+ * 调用Next之后首先会记录一下a这个key, 然后遍历的时候
+ * 直接跳过user_key为a的key, 最后迭代器会指向(S b c)
+ *
+ */
+
 void DBIter::FindNextUserEntry(bool skipping, std::string* skip) {
   // Loop until we hit an acceptable entry to yield
   assert(iter_->Valid());
   assert(direction_ == kForward);
   do {
     ParsedInternalKey ikey;
+    // 当ikey.sequence小于快照的sequence的时候才进行判断,
+    // 否则直接跳过
     if (ParseKey(&ikey) && ikey.sequence <= sequence_) {
       switch (ikey.type) {
         case kTypeDeletion:
@@ -229,6 +259,54 @@ void DBIter::Prev() {
   FindPrevUserEntry();
 }
 
+/*
+ *
+ * eg1..
+ *   (D a) 18   -> (S a b) 14 -> NULL
+ *   (S a c) 10 -> (S a f) 8  -> (S b d) 4 -> NULL
+ *
+ *  调用SeekToLast()之后迭代器会指向record (S a f) 8, 但是成员
+ *  变量saved_key_和saved_value_会记录record (S b d) 4
+ *  此时调用key(), value()返回的分别是b, d
+ *
+ *  调用Prev()之后此时iter_已经失效, 并且saved_key_和saved_value_
+ *  里面不存储任何内容, 并且由于value_type == kTypeDeletion还会
+ *  将DBIter的成员变量赋值为false, 宣告DBIter失效
+ *
+ *
+ * eg2..
+ *   (S a b) 20 -> (D a)  18 -> (S a c) 14 -> NULL
+ *   (S a c) 10 -> (S b c) 8  -> (S b d) 4 -> NULL
+ *
+ *  调用SeekToLast()之后迭代器会指向record (S a c) 10, 但是成员
+ *  变量saved_key_和saved_value_会记录record (S b c) 8, 此时调用
+ *  key(), value()返回的分别是b, c
+ *
+ *  调用Prev()之后此时iter_已经失效，但是saved_key_和saved_value_
+ *  会记录record(S a b) 20, 此时调用key(), vlaue()返回分别是a, b
+ *  注意此时虽然iter_已经失效了, 但是DBIter的成员变量valid_被赋值为
+ *  true, 所以外界调用迭代器的Valid()函数返回的是true
+ *  再次调用Prev()之后, 由于下列函数一开始会将value_type设置为
+ *  kTypeDeletion,并且由于iter_是失效的，所以直接走到最下面的逻辑
+ *  将成员变量valid_赋值为false, 宣告DBIter失效
+ *
+ *
+ * eg3..
+ *   (S a b) 18 -> (S b d) 14 -> (S b f) 10 -> NULL
+ *   (S a c) 9  -> (S b c) 7  -> NULL
+ *
+ *  调用SeekToLast()之后迭代器会指向(S a c) 9，但是成员变量
+ *  saved_key_和saved_value_会记录record (S b d) 14
+ *  此时调用key(), value()返回的分别是b, d
+ *
+ *  调用Prev()之后此时iter_已经失效, 但是saved_key_和saved_value_
+ *  会记录record (S a b) 18, 此时调用key(), value()返回分别是a, b
+ *  注意此时虽然iter_已经失效了, 但是DBIter的成员变量valid_被赋值为
+ *  true, 所以外界调用迭代器的Valid()函数返回的是true
+ *  再次调用Prev()之后, 由于下列函数一开始会将value_type设置为
+ *  kTypeDeletion,并且由于iter_是失效的，所以直接走到最下面的逻辑
+ *  将成员变量valid_赋值为false, 宣告DBIter失效
+ */
 void DBIter::FindPrevUserEntry() {
   assert(direction_ == kReverse);
 
