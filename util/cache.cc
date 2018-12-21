@@ -40,11 +40,11 @@ namespace {
 // An entry is a variable length heap-allocated structure.  Entries
 // are kept in a circular doubly linked list ordered by access time.
 struct LRUHandle {
-  void* value;
-  void (*deleter)(const Slice&, void* value);
-  LRUHandle* next_hash;
-  LRUHandle* next;
-  LRUHandle* prev;
+  void* value;                                // 由于value是个指针，指向的内容可能是我们自己在堆上
+  void (*deleter)(const Slice&, void* value); // 分配的空间，所以我们要自己定义一个方法对其进行回收
+  LRUHandle* next_hash;  // 用于指向HandleTable中其下一个LRUHandle的指针
+  LRUHandle* next;       // next和prev是用于LRUCache中lru_或者in_use_环形双链表当中, 而
+  LRUHandle* prev;       // 当前LRUHandle要么在lru_中，要么在in_use_中, 不可能同时存在
   size_t charge;      // TODO(opt): Only allow uint32_t?
   size_t key_length;
   bool in_cache;      // Whether entry is in the cache.
@@ -134,6 +134,8 @@ class HandleTable {
     LRUHandle* old = *ptr;
     h->next_hash = (old == NULL ? NULL : old->next_hash);
     *ptr = h;
+    // old == NULL表示新添加节点，需要对elems_进行累加
+    // 反之是替换之前的节点
     if (old == NULL) {
       ++elems_;
       if (elems_ > length_) {
@@ -199,7 +201,8 @@ class HandleTable {
     return ptr;
   }
 
-  // 这就是一个扩容然后rehash的操作
+  // 这就是一个扩容然后rehash的操作, 在HandleTable构造方法里会调用
+  // Resize方法, 所以list_不会为空
   void Resize() {
     uint32_t new_length = 4;
     while (new_length < elems_) {
@@ -312,6 +315,12 @@ void LRUCache::Unref(LRUHandle* e) {
     (*e->deleter)(e->key(), e->value);
     free(e);
   } else if (e->in_cache && e->refs == 1) {  // No longer in use; move to lru_ list.
+    // 当e->in_cache && e->refs == 1的时候表示外界已经没有客户端引用
+    // 这时候当前LRUHandle可能在in_use_中也有可能在lru_中
+    // 在in_use_中的场景：先将其从in_use_中移除，然后将其插入lru_
+    //                    当中, 成为lru_当前的newest entry
+    // 在lru_中的场景: 将其从lru_环形双链表中一个较老的位置移到
+    //                 较新的位置上, 成为lru_当前的newest entry
     LRU_Remove(e);
     LRU_Append(&lru_, e);
   }
@@ -367,11 +376,21 @@ Cache::Handle* LRUCache::Insert(
     e->in_cache = true;
     LRU_Append(&in_use_, e);
     usage_ += charge;
+    // table_.Insert(e)返回非NULL，表示这次是
+    // 替换节点，而不是新增节点，而返回值是指
+    // 向被替换节点的指针
     FinishErase(table_.Insert(e));
   } else {  // don't cache. (capacity_==0 is supported and turns off caching.)
     // next is read by key() in an assert, so it must be initialized
     e->next = NULL;
   }
+
+  // 在lru_环形双链表里的LRUHandle，它的refs值必然是1, 因为
+  // 没有外界客户端对其进行引用, 这时候先调用table_.Remove()
+  // 方法将这个节点从HandleTable中移除，然后再调用FinishErase
+  // 方法将这个节点从lru_中移除, 最后调用deleter将这个节点进行
+  // 析构，释放内存, 如此循环，直到usage_小于capacity_或者
+  // lru_环形链表已经为空
   while (usage_ > capacity_ && lru_.next != &lru_) {
     LRUHandle* old = lru_.next;
     assert(old->refs == 1);
@@ -383,6 +402,11 @@ Cache::Handle* LRUCache::Insert(
 
   return reinterpret_cast<Cache::Handle*>(e);
 }
+
+// 调用FinishErase之前实际上当前LRUHandle已经从HandleTable中移除了, 而
+// FinishErase的作用是将其从in_use_或者lru_中移除, 从而达到释放LRUCache
+// 中capacity_的作用，如果从in_use_或者lru_中移除之后发现外界对当前LRUHandle
+// 也没有引用了，在Unref中就会调用它的deleter释放空间
 
 // If e != NULL, finish removing *e from the cache; it has already been removed
 // from the hash table.  Return whether e != NULL.  Requires mutex_ held.
@@ -434,6 +458,9 @@ class ShardedLRUCache : public Cache {
  public:
   explicit ShardedLRUCache(size_t capacity)
       : last_id_(0) {
+    // ShardedLRUCache实际上就是内部维护了多个LRUCache而已,
+    // 在数据插入和查找的时候首先对key进行Hash取模，确认
+    // 数据在哪个LRUCache当中，调用对应LRUCache的方法
     const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
     for (int s = 0; s < kNumShards; s++) {
       shard_[s].SetCapacity(per_shard);

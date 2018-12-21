@@ -182,6 +182,8 @@ class Block::Iter : public Iterator {
 
     // Scan backwards to a restart point before current_
     const uint32_t original = current_;
+    // 如果当前的位置已经小于等于当前重启点指向的位置，则
+    // 更新重启点索引信息
     while (GetRestartPoint(restart_index_) >= original) {
       if (restart_index_ == 0) {
         // No more entries
@@ -192,6 +194,8 @@ class Block::Iter : public Iterator {
       restart_index_--;
     }
 
+    // 先Seek到当前重启点指向的位置，然后向后遍历，找到当前Entry的
+    // 前一个Entry
     SeekToRestartPoint(restart_index_);
     do {
       // Loop until end of current entry hits the start of original entry
@@ -262,6 +266,9 @@ class Block::Iter : public Iterator {
    * -----------------------------------------------------------
    *               ^                 ^
    *  value_.data()/current_      restarts
+   *
+   *  先Seek到最后一个重启点指向的位置, 然后向后遍历，直到NextEntry的
+   *  位置大于等于restarts_指向的位置
    */
   virtual void SeekToLast() {
     SeekToRestartPoint(num_restarts_ - 1);
@@ -297,9 +304,13 @@ class Block::Iter : public Iterator {
       CorruptionError();
       return false;
     } else {
+      // 如果是p的位置是重启点指向的位置，那么解析出来的shared应该
+      // 为0, 而key_.resize(shared)会将key_中的内容清空
       key_.resize(shared);
       key_.append(p, non_shared);
       value_ = Slice(p + non_shared, value_length);
+      // 如果当前的位置已经大于等于下一个重启点的位置
+      // 则更新重启点索引信息
       while (restart_index_ + 1 < num_restarts_ &&
              GetRestartPoint(restart_index_ + 1) < current_) {
         ++restart_index_;

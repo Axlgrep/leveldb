@@ -1171,6 +1171,7 @@ void VersionSet::Finalize(Version* v) {
     }
   }
 
+  // 记录下当前版本最适合做compact的level以及这个level计算出来的score
   v->compaction_level_ = best_level;
   v->compaction_score_ = best_score;
 }
@@ -1339,11 +1340,16 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  // level 如果是0那么这一层需要c->inputs_[0].size()个迭代器，如果不是level 0, 只需要一个迭代器
+  // level + 1层只需要一个迭代器
+  // 根据上面的条件计算出space的值
   const int space = (c->level() == 0 ? c->inputs_[0].size() + 1 : 2);
   Iterator** list = new Iterator*[space];
   int num = 0;
   for (int which = 0; which < 2; which++) {
     if (!c->inputs_[which].empty()) {
+      // 如果当前是第Level 0层，需要为每个sst文件创建
+      // 一个Iterator, 因为Level 0层sst文件之间有overlap
       if (c->level() + which == 0) {
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
@@ -1421,10 +1427,15 @@ Compaction* VersionSet::PickCompaction() {
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
+  // 获取第level层给定的sst文件能表示的区间[smallest, largest]
   GetRange(c->inputs_[0], &smallest, &largest);
 
+  // 在level + 1层中获取和区间[smallest_key, largest_key]
+  // 有overlap的所有sst文件, 将其存入c->inputs_[1]集合当中
   current_->GetOverlappingInputs(level+1, &smallest, &largest, &c->inputs_[1]);
 
+  // 获取第level和level + 1层所有给定的sst文件能够表示的
+  // 总区间[all_start, all_limit]
   // Get entire range covered by compaction
   InternalKey all_start, all_limit;
   GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);
@@ -1433,10 +1444,18 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // changing the number of "level+1" files we pick up.
   if (!c->inputs_[1].empty()) {
     std::vector<FileMetaData*> expanded0;
+    // 在上面的逻辑中我们已经通过第level第level + 1层的所有sst文件获取到了
+    // 总区间[all_start, all_limit], 在这里有点贪心算法的思想, 然后在第level
+    // 层重新获取一遍和这个区间有overlap的所有sst文件放到expanded0集合中(目的
+    // 是在符合要求的前提下, 一次尽量多的把第level层能参加compact的sst文件都带上.
     current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
     const int64_t inputs0_size = TotalFileSize(c->inputs_[0]);
     const int64_t inputs1_size = TotalFileSize(c->inputs_[1]);
     const int64_t expanded0_size = TotalFileSize(expanded0);
+    // 如果用[all_start, all_limit]获取的sst文件集合比原先我们
+    // 在第level 0层获取的sst文件集合要多.
+    // 并且当前参与compact的总文件数(inputs1_size + expanded0_size)
+    // 小于ExpandedCompactionByteSizeLimit
     if (expanded0.size() > c->inputs_[0].size() &&
         inputs1_size + expanded0_size <
             ExpandedCompactionByteSizeLimit(options_)) {
@@ -1484,6 +1503,8 @@ Compaction* VersionSet::CompactRange(
     const InternalKey* begin,
     const InternalKey* end) {
   std::vector<FileMetaData*> inputs;
+  // 找到当前第level层中和区间[begin, end]有overlap的所有sst文件，
+  // 存放到inputs集合当中
   current_->GetOverlappingInputs(level, begin, end, &inputs);
   if (inputs.empty()) {
     return NULL;
@@ -1550,6 +1571,8 @@ void Compaction::AddInputDeletions(VersionEdit* edit) {
   }
 }
 
+// 判断给定的user_key是否可能出现在[level_ + 2， kNumLevels]的sst文件当中
+// 如果可能返回false, 如果不可能，返回true
 bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
   // Maybe use binary search to find right entry instead of linear search?
   const Comparator* user_cmp = input_version_->vset_->icmp_.user_comparator();

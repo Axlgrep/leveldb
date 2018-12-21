@@ -138,6 +138,9 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
   has_imm_.Release_Store(NULL);
 
   // Reserve ten files or so for other uses and give the rest to TableCache.
+  // options.max_open_files记录的是LevelDB最大的可以打开文件描述符的数量,
+  // table_cache_size记录的是table_cache_中最大缓存打开sst文件的数量(实际上就是
+  // 打开了sst文件，并且把index_block读入内存当中)
   const int table_cache_size = options_.max_open_files - kNumNonTableCacheFiles;
   table_cache_ = new TableCache(dbname_, &options_, table_cache_size);
 
@@ -543,6 +546,9 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != NULL) {
+      // 我们选择把刚生成的sst文件放到更加高的level中(如果符合条件的话，如果
+      // 新生成的sst文件和level 1层的sst文件有overlap的话，那么就只能将其
+      // 放在level 0层了
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
     // 通过PickLevelFromMemTableOutput方法我们可以确定将当前新生成的sst文件
@@ -622,17 +628,23 @@ void DBImpl::TEST_CompactRange(int level, const Slice* begin,const Slice* end) {
   if (begin == NULL) {
     manual.begin = NULL;
   } else {
+    // 相同的UserKey, Sequence最大的在最前面，所以这里Sequence要取一个极大值
+    // 才能表示左边界
     begin_storage = InternalKey(*begin, kMaxSequenceNumber, kValueTypeForSeek);
     manual.begin = &begin_storage;
   }
   if (end == NULL) {
     manual.end = NULL;
   } else {
+    // 相同的UserKey, Sequence最小的在最后面，所以这里Sequence要取一个极小值
+    // 才能表示右边界
     end_storage = InternalKey(*end, 0, static_cast<ValueType>(0));
     manual.end = &end_storage;
   }
 
 
+  // 实际上Compact任务是放到另外一个线程执行的，但是在执行完成
+  // 之前manual.done为false, 所有外界会阻塞在这个循环当中
   MutexLock l(&mutex_);
   while (!manual.done && !shutting_down_.Acquire_Load() && bg_error_.ok()) {
     if (manual_compaction_ == NULL) {  // Idle
@@ -685,6 +697,7 @@ void DBImpl::MaybeScheduleCompaction() {
              !versions_->NeedsCompaction()) {
     // No work to be done
   } else {
+    // 表示当前有后台线程正在执行compact
     bg_compaction_scheduled_ = true;
     env_->Schedule(&DBImpl::BGWork, this);
   }
@@ -705,6 +718,8 @@ void DBImpl::BackgroundCall() {
     BackgroundCompaction();
   }
 
+  // 执行完compact之后将这边成员变量置为
+  // false, 表示当前后台没有compact任务
   bg_compaction_scheduled_ = false;
 
   // Previous compaction may have produced too many files in a level,
@@ -746,6 +761,10 @@ void DBImpl::BackgroundCompaction() {
     // Nothing to do
   } else if (!is_manual && c->IsTrivialMove()) {
     // Move file to next level
+    // 这里做了一个优化，当前做compact的level如果只有一个
+    // sst文件被选中，并且level + 1层没有sst文件和第level
+    // 层的这个sst文件有overlap, 那么直接将其从第level层
+    // 挪到level + 1层来就可以了
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->DeleteFile(c->level(), f->number);
@@ -903,8 +922,10 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
       static_cast<long long>(compact->total_bytes));
 
   // Add compaction outputs
+  // 将本次compact在level和level + 1层选中input文件在edit中标记删除
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
+  // 将本次compact中生成的output文件添加到edit中
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     compact->compaction->edit()->AddFile(
@@ -988,6 +1009,11 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       } else if (ikey.type == kTypeDeletion &&
                  ikey.sequence <= compact->smallest_snapshot &&
                  compact->compaction->IsBaseLevelForKey(ikey.user_key)) {
+        // 当前记录带有删除标记
+        // 并且当前记录的sequence，小于快照的序号
+        // 最重要的一点是当前的user_key，在[level_ + 2， kNumLevels]层没有
+        // user_key对应的记录(当前参加compact的是第level和level + 1层)
+        //
         // For this user key:
         // (1) there is no data in higher levels
         // (2) data in lower levels will have larger sequence numbers
@@ -1012,12 +1038,18 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 
     if (!drop) {
       // Open output file if necessary
+      // 两种情况builder为NULL
+      // 1. 这次compact还没有创建过Builder
+      // 2. 这次compact已经完成了前一个sst文件, 这时候会把之前的
+      // builder给delete掉，并且令其为NULL
       if (compact->builder == NULL) {
         status = OpenCompactionOutputFile(compact);
         if (!status.ok()) {
           break;
         }
       }
+      // NumEntries为0表示之前没有往这个builder里面添加过key/value
+      // 所以第一个添加的key/value值是最小的
       if (compact->builder->NumEntries() == 0) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
@@ -1025,6 +1057,11 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       compact->builder->Add(key, input->value());
 
       // Close output file if it is big enough
+      // 如果当前TableBuilder里面的内容已经大于等于MaxOutputFileSize(),
+      // 则为当前的sst文件末尾添加index block和footer等信息
+      // 在Leveldb中好像每一层的sst文件大小都是一样的？而在Rocksdb中sst
+      // 文件的大小是根据target_file_size_base和target_file_size_multipier
+      // 进行确认的
       if (compact->builder->FileSize() >=
           compact->compaction->MaxOutputFileSize()) {
         status = FinishCompactionOutputFile(compact, input);
