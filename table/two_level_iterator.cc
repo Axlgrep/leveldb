@@ -158,6 +158,9 @@ void TwoLevelIterator::InitDataBlock() {
     SetDataIterator(NULL);
   } else {
     Slice handle = index_iter_.value();
+    // 如果当前data_iter_为空，或者当前data_block_handle与index_iter_当前指向的
+    // value相同，说明当前的data_block就是index_iter_指向的那个，无需重新读取Data
+    // Block
     if (data_iter_.iter() != NULL && handle.compare(data_block_handle_) == 0) {
       // data_iter_ is already constructed with this iterator, so
       // no need to change anything

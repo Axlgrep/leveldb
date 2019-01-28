@@ -88,6 +88,9 @@ static inline const char* DecodeEntry(const char* p, const char* limit,
   *shared = reinterpret_cast<const unsigned char*>(p)[0];
   *non_shared = reinterpret_cast<const unsigned char*>(p)[1];
   *value_length = reinterpret_cast<const unsigned char*>(p)[2];
+  // 一个char占用8 bytes, 如果这三个数进行或操作的结果小于128, 则说明
+  // 三者的最高位都不为1，也就是说这三个数都是用1 char就能表示完全, 不
+  // 需要逐一调用GetVarint32Ptr进行解析
   if ((*shared | *non_shared | *value_length) < 128) {
     // Fast path: all three values are encoded in one byte each
     p += 3;

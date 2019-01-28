@@ -178,6 +178,9 @@ Iterator* Table::BlockReader(void* arg,
     BlockContents contents;
     if (block_cache != NULL) {
       char cache_key_buffer[16];
+      // 如果block_cache不为空，说明用户打开了缓存data block的选项
+      // 这时候我们用table的cache_id加上当前data block在sst文件中的
+      // 偏移量组合成一个cache_key到block_cache中进行查找
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
       EncodeFixed64(cache_key_buffer+8, handle.offset());
       Slice key(cache_key_buffer, sizeof(cache_key_buffer));
@@ -188,6 +191,9 @@ Iterator* Table::BlockReader(void* arg,
         s = ReadBlock(table->rep_->file, options, handle, &contents);
         if (s.ok()) {
           block = new Block(contents);
+          // 如果当前contents的空间是在堆上分配的, 并且options.fill_cache为
+          // true(这个选项默认就是true, 在bw中如果是scan操作，会主动把这个
+          // fill_cache的值设置成false, 在不需要的时候尽量减少内存的使用)
           if (contents.cachable && options.fill_cache) {
             cache_handle = block_cache->Insert(
                 key, block, block->size(), &DeleteCachedBlock);
@@ -206,8 +212,12 @@ Iterator* Table::BlockReader(void* arg,
   if (block != NULL) {
     iter = block->NewIterator(table->rep_->options.comparator);
     if (cache_handle == NULL) {
+      // 如果当前的Data Block没有存缓存，在iter析构的时候会回调
+      // DeleteBlock方法释放掉当前创建的Block对象
       iter->RegisterCleanup(&DeleteBlock, block, NULL);
     } else {
+      // 如果当前Data Block已经封装成LRUHandle对象缓存到block_cache里面了
+      // 在iter析构的时候会回调ReleaseBlock方法释放LRUHandle对象
       iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
     }
   } else {
